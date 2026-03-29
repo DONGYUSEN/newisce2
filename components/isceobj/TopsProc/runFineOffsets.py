@@ -173,12 +173,14 @@ def runFineOffsets(self):
     Estimate offsets using geometry
     '''
 
-    hasGPU = self.useGPU and self._insar.hasGPU()
-    
-    if hasGPU:
+    useGPU = self.useGPU and self._insar.hasGPU()
+
+    if useGPU:
         runGeo2rdr = runGeo2rdrGPU
+        usingGPU = True
     else:
         runGeo2rdr = runGeo2rdrCPU
+        usingGPU = False
 
 
     ##Catalog
@@ -229,6 +231,16 @@ def runFineOffsets(self):
                      'hgt': os.path.join(geomDir,'hgt_%02d.rdr'%(mBurst+1)),
                      'rangeOffName': os.path.join(outdir, 'range_%02d.off'%(mBurst+1)),
                      'azOffName': os.path.join(outdir, 'azimuth_%02d.off'%(mBurst+1))}
-        
-            runGeo2rdr(burst, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
 
+            try:
+                runGeo2rdr(burst, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
+            except Exception as err:
+                if not usingGPU:
+                    raise
+
+                logger.warning(
+                    'GPU geo2rdr failed for IW%d burst %d, falling back to CPU geo2rdr: %s',
+                    swath, mBurst + 1, err)
+                runGeo2rdr = runGeo2rdrCPU
+                usingGPU = False
+                runGeo2rdr(burst, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)

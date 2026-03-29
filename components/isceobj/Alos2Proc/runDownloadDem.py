@@ -13,6 +13,7 @@ from isceobj.Alos2Proc.Alos2ProcPublic import runCmd
 from isceobj.Alos2Proc.Alos2ProcPublic import getBboxGeo
 
 logger = logging.getLogger('isce.alos2insar.runDownloadDem')
+STEP_SRTMGL1_URL = 'https://step.esa.int/auxdata/dem/SRTMGL1'
 
 def runDownloadDem(self):
     '''download DEM and water body
@@ -34,7 +35,7 @@ def runDownloadDem(self):
         os.makedirs(demDir, exist_ok=True)
         os.chdir(demDir)
 
-        # downloadUrl = 'http://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL1.003/2000.02.11'
+        # downloadUrl = STEP_SRTMGL1_URL
         # cmd = 'dem.py -a stitch -b {} -k -s 1 -c -f -u {}'.format(
         #        bboxStr,
         #        downloadUrl
@@ -62,7 +63,7 @@ def runDownloadDem(self):
         os.makedirs(demGeoDir, exist_ok=True)
         os.chdir(demGeoDir)
 
-        # downloadUrl = 'http://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL3.003/2000.02.11'
+        # downloadUrl = STEP_SRTMGL1_URL
         # cmd = 'dem.py -a stitch -b {} -k -s 3 -c -f -u {}'.format(
         #        bboxStr,
         #        downloadUrl
@@ -129,16 +130,19 @@ def downloadDem(bbox, demType='version3', resolution=1, fillingValue=-32768, out
 
     ds = createDemStitcher(demType)
     ds.configure()
+    download_source = resolution
 
     if demType == 'version3':
-        if resolution == 1:
-            ds._url1 = 'https://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL1.003/2000.02.11'
-        else:
-            ds._url3 = 'https://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL3.003/2000.02.11'
+        ds._url1 = STEP_SRTMGL1_URL
+        ds._url3 = STEP_SRTMGL1_URL
+        ds._extraExt3 = ds._extraExt1
+        if resolution == 3:
+            logger.warning('SRTMGL3 endpoint is unavailable; using SRTMGL1 tiles for DEM download.')
+            download_source = 1
     elif demType == 'nasadem':
         resolution = 1
+        download_source = 1
         #this url is included in the module
-        #ds._url1 = 'http://e4ftl01.cr.usgs.gov/MEASURES/NASADEM_HGT.001/2000.02.11'
     else:
         raise Exception('unknown DEM type, currently supported DEM types: version3 and nasadem')
 
@@ -155,7 +159,7 @@ def downloadDem(bbox, demType='version3', resolution=1, fillingValue=-32768, out
     if outputFile==None:
         outputFile = ds.defaultName(bbox)
 
-    if not(ds.stitchDems(bbox[0:2],bbox[2:4],resolution,outputFile,'./',keep=True)):
+    if not(ds.stitchDems(bbox[0:2],bbox[2:4],download_source,outputFile,'./',keep=True)):
         print('Could not create a stitched DEM. Some tiles are missing')
     else:
         #Apply correction  EGM96 -> WGS84

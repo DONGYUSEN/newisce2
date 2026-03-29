@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component>
+  <!-- Lutan1 辅影像：填写 SLC tiff 文件 -->
+  <property name="tiff">
+    <value>/path/to/secondary/LT1A_xxx_secondary.tiff</value>
+  </property>
+
+  <!-- 外部精轨文件（推荐）；若不用外部轨道，可注释本段 -->
+  <property name="orbitFile">
+    <value>/path/to/orbit/LT1A_xxx_orbit.xml</value>
+  </property>
+
+  <!-- 输出短名 -->
+  <property name="OUTPUT">
+    <value>secondary</value>
+  </property>
+</component>

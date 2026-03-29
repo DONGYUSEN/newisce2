@@ -31,10 +31,15 @@ def runRdr2Geo(self):
 
 
     if self.useGPU and self._insar.hasGPU():
-        topoGPU(referenceTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1, demFile, 
-                       self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.los)
+        try:
+            topoGPU(referenceTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1, demFile,
+                           self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.los)
+        except Exception as err:
+            logger.warning('GPU topo failed, falling back to CPU topo: %s', err)
+            snwe = topoCPU(referenceTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1, demFile,
+                           self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.los)
     else:
-        snwe = topoCPU(referenceTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1, demFile, 
+        snwe = topoCPU(referenceTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1, demFile,
                        self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.los)
     waterBodyRadar(self._insar.latitude, self._insar.longitude, wbdFile, self._insar.wbdOut)
 
@@ -229,5 +234,4 @@ def topoGPU(referenceTrack, numberRangeLooks, numberAzimuthLooks, demFile, latFi
             slantRangeImage.finalizeImage()
         except:
             pass
-
 

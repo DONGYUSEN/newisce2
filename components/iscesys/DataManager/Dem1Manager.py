@@ -34,6 +34,8 @@ from iscesys.Component.Component import Component
 import numpy as np
 from isceobj.Image import createDemImage
 
+STEP_SRTMGL1_URL = 'https://step.esa.int/auxdata/dem/SRTMGL1'
+
 EXTRA = Component.Parameter('_extra',
     public_name = 'extra',default = '.SRTMGL1',
     type = str,
@@ -47,7 +49,7 @@ DATA_EXT = Component.Parameter('_dataExt',
     mandatory = False,
     doc = 'Extension of the data such as .hgt')
 URL = Component.Parameter('_url',
-    public_name = 'URL',default = 'https://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL1.003/2000.02.11',
+    public_name = 'URL',default = STEP_SRTMGL1_URL,
     type = str,
     mandatory = False,
     doc = "Url for the high resolution DEM.")

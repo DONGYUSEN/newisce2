@@ -343,7 +343,7 @@ DEM_CROP_FILENAME = Component.Parameter('_demCropFilename',
 
 FILTER_STRENGTH = Component.Parameter('_filterStrength',
                                       public_name='filterStrength',
-                                      default=0.7,
+                                      default=0.6,
                                       type=float,
                                       mandatory=False,
                                       doc='')

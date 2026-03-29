@@ -759,8 +759,18 @@ def snaphuUnwrapOriginal(wrapName, corName, ampName, unwrapName, costMode = 's',
     '''
     unwrap interferogram using original snaphu program
     '''
+    import os
     import numpy as np
     import isceobj
+
+    def _safe_env_int(name, default):
+        value = os.environ.get(name)
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except Exception:
+            return default
 
     corImg = isceobj.createImage()
     corImg.load(corName + '.xml')
@@ -778,6 +788,25 @@ MAXNCOMPS       20'''.format(unwrapName+'.conncomp')
         snaphuConf = '''CORRFILEFORMAT        ALT_LINE_DATA
 CONNCOMPFILE        {}
 MAXNCOMPS       20'''.format(unwrapName+'.conncomp')
+
+    tune_lines = []
+    nproc = _safe_env_int('ISCE_SNAPHU_NPROC', 0)
+    ntile_row = _safe_env_int('ISCE_SNAPHU_NTILEROW', 0)
+    ntile_col = _safe_env_int('ISCE_SNAPHU_NTILECOL', 0)
+    row_ov = _safe_env_int('ISCE_SNAPHU_ROWOVRLP', -1)
+    col_ov = _safe_env_int('ISCE_SNAPHU_COLOVRLP', -1)
+    if nproc > 0:
+        tune_lines.append('NPROC               {}'.format(nproc))
+    if (ntile_row > 0) and (ntile_col > 0):
+        tune_lines.append('NTILEROW            {}'.format(ntile_row))
+        tune_lines.append('NTILECOL            {}'.format(ntile_col))
+        if row_ov >= 0:
+            tune_lines.append('ROWOVRLP            {}'.format(row_ov))
+        if col_ov >= 0:
+            tune_lines.append('COLOVRLP            {}'.format(col_ov))
+    if tune_lines:
+        snaphuConf += '\n' + '\n'.join(tune_lines)
+
     with open(snaphuConfFile, 'w') as f:
         f.write(snaphuConf)
     cmd = 'snaphu {} {} -f {} -{} -o {} -a {} -c {} -v --{}'.format(
@@ -1461,6 +1490,5 @@ modeProcParDict = {
                   }
 import numpy as np
 filterStdPolyIon = np.array([ 2.31536879e-05, -3.41687763e-03,  1.39904121e-01])
-
 
 

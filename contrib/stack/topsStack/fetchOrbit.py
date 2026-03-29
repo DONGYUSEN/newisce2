@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 
-from types import SimpleNamespace
-import json
-import requests
-import re
-import os
 import argparse
 import datetime
-import time
+import os
+import re
+import shutil
+import zipfile
+
+import requests
 
 orbitMap = [('precise', 'AUX_POEORB'),
             ('restituted', 'AUX_RESORB')]
 
 datefmt = "%Y%m%dT%H%M%S"
-queryfmt = "%Y-%m-%d"
+BASE_URLS = {
+    'AUX_POEORB': 'https://s1qc.asf.alaska.edu/aux_poeorb/',
+    'AUX_RESORB': 'https://s1qc.asf.alaska.edu/aux_resorb/',
+}
+STEP_BASE_URLS = {
+    'AUX_POEORB': 'https://step.esa.int/auxdata/orbits/Sentinel-1/POEORB/',
+    'AUX_RESORB': 'https://step.esa.int/auxdata/orbits/Sentinel-1/RESORB/',
+}
+
 
 def cmdLineParse():
     '''
@@ -25,12 +33,12 @@ def cmdLineParse():
                         help='Path to SAFE package of interest')
     parser.add_argument('-o', '--output', dest='outdir', type=str, default='.',
                         help='Path to output directory')
-    parser.add_argument('-t', '--token-file', dest='token_file', type=str, default='.copernicus_dataspace_token',
-                        help='Filename to save auth token file')
+    parser.add_argument('-t', '--token-file', dest='token_file', type=str, default=None,
+                        help='Kept for backward compatibility; ignored')
     parser.add_argument('-u', '--username', dest='username', type=str, default=None,
-                        help='Copernicus Data Space Ecosystem username')
+                        help='Kept for backward compatibility; ignored')
     parser.add_argument('-p', '--password', dest='password', type=str, default=None,
-                        help='Copernicus Data Space Ecosystem password')
+                        help='Kept for backward compatibility; ignored')
 
     return parser.parse_args()
 
@@ -41,88 +49,139 @@ def FileToTimeStamp(safename):
     '''
     safename = os.path.basename(safename)
     fields = safename.split('_')
-    sstamp = []  # sstamp for getting SAFE file start time, not needed for orbit file timestamps
+    sstamp = []  # SAFE file start time
 
     try:
         tstamp = datetime.datetime.strptime(fields[-4], datefmt)
         sstamp = datetime.datetime.strptime(fields[-5], datefmt)
-    except:
+    except Exception:
         p = re.compile(r'(?<=_)\d{8}')
         dt2 = p.search(safename).group()
         tstamp = datetime.datetime.strptime(dt2, '%Y%m%d')
+        sstamp = tstamp
 
     satName = fields[0]
 
     return tstamp, satName, sstamp
 
 
-def get_saved_token_data(token_file):
-    try:
-        with open(token_file, 'r') as file:
-            return json.load(file)
-    except FileNotFoundError:
-        return None
+def parse_orbit_validity(fname):
+    clean = os.path.basename(fname).replace('.zip', '')
+    fields = clean.split('_')
+    start = datetime.datetime.strptime(fields[-2][1:], datefmt)
+    stop = datetime.datetime.strptime(fields[-1].replace('.EOF', ''), datefmt)
+    return start, stop
 
 
-def save_token_data(access_token, expires_in, token_file):
-    token_data = {
-        "access_token": access_token,
-        "expires_at": time.time() + expires_in
-    }
-    with open(token_file, 'w') as file:
-        json.dump(token_data, file)
-
-
-def is_token_valid(token_data):
-    if token_data and "expires_at" in token_data:
-        return time.time() < token_data["expires_at"]
-    return False
-
-
-def get_new_token(username, password, session):
-    data = {
-        "client_id": "cdse-public",
-        "username": username,
-        "password": password,
-        "grant_type": "password",
-    }
-    url = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
-    response = session.post(url, data=data)
+def list_orbits(session, sat_name, orbit_code):
+    base_url = BASE_URLS[orbit_code]
+    response = session.get(base_url, timeout=60)
     response.raise_for_status()
-    token_info = response.json()
-    return token_info["access_token"], token_info["expires_in"]
+
+    # Example name:
+    # S1A_OPER_AUX_POEORB_OPOD_20231130T111111_V20231109T225942_20231111T005942.EOF
+    suffix = orbit_code.split('_', 1)[1]
+    pattern = r'href="(S1[AB]_OPER_AUX_{0}_OPOD_[^"]+\.EOF)"'.format(suffix)
+    names = set(re.findall(pattern, response.text))
+    names = [x for x in names if x.startswith(sat_name + '_')]
+    return sorted(names), base_url
 
 
-def download_file(file_id, outdir='.', session=None, token=None):
+def list_step_orbits_for_month(session, sat_name, orbit_code, year, month):
+    base = STEP_BASE_URLS[orbit_code]
+    url = '{0}{1}/{2}/{3:02d}/'.format(base, sat_name, year, month)
+    response = session.get(url, timeout=60)
+    if response.status_code != 200:
+        return [], url
+
+    suffix = orbit_code.split('_', 1)[1]
+    pattern = r'href="(S1[AB]_OPER_AUX_{0}_OPOD_[^"]+\.EOF(?:\.zip)?)"'.format(suffix)
+    names = set(re.findall(pattern, response.text))
+    names = [x for x in names if x.startswith(sat_name + '_')]
+    return sorted(names), url
+
+
+def find_step_orbit(session, sat_name, orbit_code, safe_start, safe_stop):
+    months = []
+    for dt in (safe_start - datetime.timedelta(days=1), safe_start, safe_stop, safe_stop + datetime.timedelta(days=1)):
+        ym = (dt.year, dt.month)
+        if ym not in months:
+            months.append(ym)
+
+    matches = []
+    for year, month in months:
+        names, month_url = list_step_orbits_for_month(session, sat_name, orbit_code, year, month)
+        for name in names:
+            tbef, taft = parse_orbit_validity(name)
+            if (tbef <= safe_start) and (taft >= safe_stop):
+                matches.append((name, month_url + name))
+
+    if not matches:
+        return None, None
+
+    matches.sort(key=lambda x: x[0])
+    return matches[-1]
+
+
+def download_file(urls, outname, session=None):
     '''
-    Download file to specified directory.
+    Download file from url to outname.
     '''
 
     if session is None:
         session = requests.session()
 
-    url = "https://zipper.dataspace.copernicus.eu/odata/v1/"
-    url += f"Products({file_id})/$value"
+    last_error = None
+    for url in urls:
+        try:
+            print('Downloading URL: ', url)
+            request = session.get(url, stream=True, timeout=120, verify=True, allow_redirects=True)
+            request.raise_for_status()
 
-    path = outdir
+            with open(outname, 'wb') as f:
+                for chunk in request.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        f.flush()
+            return
+        except Exception as err:
+            last_error = err
+            if os.path.exists(outname):
+                os.remove(outname)
+
+    raise last_error
+
+
+def download_step_orbit(session, sat_name, orbit_code, safe_start, safe_stop, outdir):
+    fname, url = find_step_orbit(session, sat_name, orbit_code, safe_start, safe_stop)
+    if fname is None:
+        raise RuntimeError('No STEP orbit found for {0} {1}'.format(sat_name, orbit_code))
+
     print('Downloading URL: ', url)
-    request = session.get(url, stream=True, verify=True,
-                          headers = {"Authorization": f"Bearer {token}"})
+    req = session.get(url, timeout=120, verify=True)
+    req.raise_for_status()
 
-    try:
-        val = request.raise_for_status()
-        success = True
-    except:
-        success = False
+    if fname.endswith('.zip'):
+        zip_path = os.path.join(outdir, fname)
+        with open(zip_path, 'wb') as f:
+            f.write(req.content)
 
-    if success:
-        with open(path, 'wb') as f:
-            for chunk in request.iter_content(chunk_size=1024):
-                if chunk:
-                    f.write(chunk)
-                    f.flush()
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            eof_members = [m for m in zf.namelist() if m.endswith('.EOF')]
+            if len(eof_members) == 0:
+                raise RuntimeError('No EOF file found inside {}'.format(zip_path))
+            member = eof_members[0]
+            out_eof = os.path.join(outdir, os.path.basename(member))
+            with zf.open(member) as src, open(out_eof, 'wb') as dst:
+                shutil.copyfileobj(src, dst)
 
-    return success
+        os.remove(zip_path)
+        return out_eof
+
+    outpath = os.path.join(outdir, fname)
+    with open(outpath, 'wb') as f:
+        f.write(req.content)
+    return outpath
 
 
 if __name__ == '__main__':
@@ -131,89 +190,45 @@ if __name__ == '__main__':
     '''
 
     inps = cmdLineParse()
-    username = inps.username
-    password = inps.password
-    token_file = os.path.expanduser(inps.token_file)
 
     fileTS, satName, fileTSStart = FileToTimeStamp(inps.input)
     print('Reference time: ', fileTS)
     print('Satellite name: ', satName)
+
+    os.makedirs(inps.outdir, exist_ok=True)
+
     match = None
+    match_base = None
+    match_code = None
     session = requests.Session()
 
-    for spec in orbitMap:
-        delta = datetime.timedelta(days=1)
-        timebef = (fileTS - delta).strftime(queryfmt)
-        timeaft = (fileTS + delta).strftime(queryfmt)
-        url = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
+    for _, orbit_code in orbitMap:
+        orbit_names, base_url = list_orbits(session, satName, orbit_code)
 
-        start_time = timebef + "T00:00:00.000Z"
-        stop_time = timeaft + "T23:59:59.999Z"
-
-        query = " and ".join([
-            f"ContentDate/Start gt '{start_time}'",
-            f"ContentDate/Start lt '{stop_time}'",
-            f"ContentDate/End gt '{start_time}'",
-            f"ContentDate/End lt '{stop_time}'",
-            f"startswith(Name,'{satName}')",
-            f"contains(Name,'{spec[1]}')",
-        ])
-
-        success = False
         match = None
+        for orbit_name in orbit_names:
+            tbef, taft = parse_orbit_validity(orbit_name)
+            if (tbef <= fileTSStart) and (taft >= fileTS):
+                # Keep the latest matching file in lexical order
+                match = orbit_name
 
-        try:
-            r = session.get(url, verify=True, params={"$filter": query})
-            r.raise_for_status()
-
-            entries = json.loads(r.text, object_hook=lambda x: SimpleNamespace(**x)).value
-
-            for entry in entries:
-                entry_datefmt = "%Y-%m-%dT%H:%M:%S.000000Z"
-                tbef = datetime.datetime.strptime(entry.ContentDate.Start, entry_datefmt)
-                taft = datetime.datetime.strptime(entry.ContentDate.End, entry_datefmt)
-                if (tbef <= fileTSStart) and (taft >= fileTS):
-                    matchFileName = entry.Name
-                    match = entry.Id
-
-            if match is not None:
-                success = True
-        except:
-            raise
-
-        if success:
+        if match is not None:
+            match_base = base_url
+            match_code = orbit_code
             break
 
     if match is not None:
-
-        token_data = get_saved_token_data(token_file)
-        if token_data and is_token_valid(token_data):
-            print("using saved access token")
-            token = token_data["access_token"]
+        output = os.path.join(inps.outdir, match)
+        if os.path.exists(output):
+            print('Orbit already exists: ', output)
         else:
-            print("generating a new access token")
-            if username is None or password is None:
-                try:
-                    import netrc
-                    host = "dataspace.copernicus.eu"
-                    creds = netrc.netrc().hosts[host]
-                except:
-                    if username is None:
-                        username = input("Username: ")
-                    if password is None:
-                        from getpass import getpass
-                        password = getpass("Password (will not be displayed): ")
-                else:
-                    if username is None:
-                        username, _, _ = creds
-                    if password is None:
-                        _, _, password = creds
-            token, expires_in = get_new_token(username, password, session)
-            save_token_data(token, expires_in, token_file)
-
-        output = os.path.join(inps.outdir, matchFileName)
-        res = download_file(match, output, session, token)
-        if res is False:
-            print('Failed to download orbit ID:', match)
+            try:
+                urls = [match_base + match]
+                download_file(urls, output, session)
+                print('Saved orbit to: ', output)
+            except Exception:
+                print('s1qc download failed, fallback to STEP mirror ...')
+                out = download_step_orbit(session, satName, match_code, fileTSStart, fileTS, inps.outdir)
+                print('Saved orbit to: ', out)
     else:
-        print('Failed to find {1} orbits for tref {0}'.format(fileTS, satName))
+        print('Failed to find orbits for tref {0} ({1})'.format(fileTS, satName))

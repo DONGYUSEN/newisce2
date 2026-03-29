@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<insarApp>
+  <component name="insar">
+    <!-- 传感器类型：TIANYI -->
+    <property name="sensor name">TIANYI</property>
+
+    <!-- 参考影像参数文件 -->
+    <component name="reference">
+      <catalog>reference_TIANYI_cn.xml</catalog>
+    </component>
+
+    <!-- 辅影像参数文件 -->
+    <component name="secondary">
+      <catalog>secondary_TIANYI_cn.xml</catalog>
+    </component>
+
+    <!-- DEM 文件（建议填绝对路径） -->
+    <property name="demFilename">/path/to/dem.dem.wgs84</property>
+
+    <!-- Tianyi SLC 建议使用 useDEFAULT -->
+    <property name="reference doppler method">useDEFAULT</property>
+    <property name="secondary doppler method">useDEFAULT</property>
+
+    <!-- GPU 优先：可用则优先 GPU，不可用或失败时回退 -->
+    <property name="use GPU">True</property>
+
+    <!-- 建议打开密集配准 -->
+    <property name="do denseoffsets">True</property>
+
+    <!-- rubbersheet 开关（按你的需求默认关闭方位向） -->
+    <property name="do rubbersheetingAzimuth">False</property>
+    <property name="do rubbersheetingRange">False</property>
+
+    <!-- 可选：解缠方式 -->
+    <property name="do unwrap">True</property>
+    <property name="unwrapper name">snaphu</property>
+
+    <!--
+      说明（Tianyi）：
+      1) 本模板以 stripmap SLC 标准流程为主，参数可直接按项目微调。
+      2) 若需要做严格 A/B，对照组请仅修改“几何/多普勒相关设置”，其余参数保持一致。
+    -->
+  </component>
+</insarApp>

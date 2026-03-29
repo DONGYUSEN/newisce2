@@ -27,6 +27,15 @@ defoMax = '2'
 maxNodes = 72
 
 
+def _has_gpu_support():
+    try:
+        from zerodop.GPUtopozero.GPUtopozero import PyTopozero
+        from zerodop.GPUgeo2rdr.GPUgeo2rdr import PyGeo2rdr
+        return True
+    except Exception:
+        return False
+
+
 def createParser():
     parser = argparse.ArgumentParser( description='Preparing the directory structure and config files for stack processing of StripMap data')
 
@@ -97,8 +106,10 @@ def createParser():
             help='If input data is already focused to SLCs - Default : do focus')
     parser.add_argument('-c', '--text_cmd', dest='text_cmd', type=str, default='',
             help='text command to be added to the beginning of each line of the run files. Example : source ~/.bash_profile;')
-    parser.add_argument('-useGPU', '--useGPU', dest='useGPU',action='store_true', default=False,
-             help='Allow App to use GPU when available')
+    parser.add_argument('-useGPU', '--useGPU', dest='useGPU', action='store_true', default=None,
+             help='Force enabling GPU when available (default: auto-detect)')
+    parser.add_argument('-noGPU', '--noGPU', dest='useGPU', action='store_false',
+             help='Force disabling GPU')
 
     parser.add_argument('--summary', dest='summary', action='store_true', default=False, help='Show summary only')
     return parser
@@ -110,6 +121,8 @@ def cmdLineParse(iargs = None):
     inps.slcDir = os.path.abspath(inps.slcDir)
     inps.workDir = os.path.abspath(inps.workDir)
     inps.dem = os.path.abspath(inps.dem)
+    if inps.useGPU is None:
+        inps.useGPU = _has_gpu_support()
 
     return inps
 

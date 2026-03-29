@@ -29,10 +29,15 @@ def runGeo2Rdr(self):
 
     hasGPU= self.useGPU and self._insar.hasGPU()
     if hasGPU:
-        geo2RdrGPU(secondaryTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1, 
-            self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.rangeOffset, self._insar.azimuthOffset)
+        try:
+            geo2RdrGPU(secondaryTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1,
+                self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.rangeOffset, self._insar.azimuthOffset)
+        except Exception as err:
+            logger.warning('GPU geo2rdr failed, falling back to CPU geo2rdr: %s', err)
+            geo2RdrCPU(secondaryTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1,
+                self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.rangeOffset, self._insar.azimuthOffset)
     else:
-        geo2RdrCPU(secondaryTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1, 
+        geo2RdrCPU(secondaryTrack, self._insar.numberRangeLooks1, self._insar.numberAzimuthLooks1,
             self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.rangeOffset, self._insar.azimuthOffset)
 
     os.chdir('../')

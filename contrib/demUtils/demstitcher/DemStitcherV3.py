@@ -44,12 +44,12 @@ from iscesys.Component.Component import Component
 from contrib.demUtils.DemStitcher import DemStitcher as DS
 #Parameters definitions
 URL1 = Component.Parameter('_url1',
-    public_name = 'URL1',default = 'https://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL1.003/2000.02.11',
+    public_name = 'URL1',default = 'https://step.esa.int/auxdata/dem/SRTMGL1',
     type = str,
     mandatory = False,
     doc = "Url for the high resolution DEM. Used for SRTM version3")
 URL3 = Component.Parameter('_url3',
-    public_name = 'URL3',default = 'https://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL3.003/2000.02.11',
+    public_name = 'URL3',default = 'https://step.esa.int/auxdata/dem/SRTMGL1',
     type = str,
     mandatory = False,
     doc = "Url for the low resolution DEM. Used for SRTM version3")
@@ -91,13 +91,7 @@ class DemStitcher(DS):
             lon = lon
         ns,ew = self.convertCoordinateToString(lat,lon)
         if(self._hasExtras):
-            if(source and source == 1):
-                toAppend = '.' + self._extraExt1
-            elif(source and source == 3):
-                toAppend = '.' + self._extraExt3
-            else:
-                print('Unrecognized dem source',source)
-                raise Exception
+            toAppend = '.' + self._extra_ext_for_source(source)
 
             return ns + ew +  toAppend + self._extension +  self._zip
 
@@ -107,14 +101,7 @@ class DemStitcher(DS):
 
     def getUnzippedName(self,name,source = None):
         if(self._hasExtras):
-            if(source and source == 1):
-                name =  name.replace('.' + self._extraExt1,'')
-            elif(source and source == 3):
-                name =  name.replace('.' + self._extraExt3,'')
-
-            else:
-                print('Unrecognized dem source',source)
-                raise Exception
+            name = name.replace('.' + self._extra_ext_for_source(source), '')
         return name.replace(self._zip,'')
 
     ##
@@ -148,8 +135,11 @@ class DemStitcher(DS):
                 if not os.path.exists(os.path.join(downloadDir,fileNow)):
                         if(self._un is None or self._pw is None):
                             #opener.retrieve(url + fileNow,os.path.join(downloadDir,fileNow))
+                            needs_earthdata_auth = ('e4ftl01.cr.usgs.gov' in url) or ('urs.earthdata.nasa.gov' in url)
                             if os.path.exists(os.path.join(os.environ['HOME'],'.netrc')):
                                 command = 'curl -n  -L -c $HOME/.earthdatacookie -b $HOME/.earthdatacookie -k -f -O ' + os.path.join(url,fileNow)
+                            elif not needs_earthdata_auth:
+                                command = 'curl -L -k -f -O ' + os.path.join(url,fileNow)
                             else:
                                 self.logger.error('Please create a .netrc file in your home directory containing\nmachine urs.earthdata.nasa.gov\n\tlogin yourusername\n\tpassword yourpassword')
                                 sys.exit(1)
@@ -287,3 +277,14 @@ class DemStitcher(DS):
         self._remove = ['.jpg','.xml']
         if not self.logger:
             self.logger = logging.getLogger('isce.contrib.demUtils.DemStitcherV3')
+    def _extra_ext_for_source(self, source):
+        if source == 1:
+            return self._extraExt1
+        if source == 3:
+            # If URL3 points to SRTMGL1 mirror, use SRTMGL1 naming.
+            url3 = (self._url3 or '').upper()
+            if 'SRTMGL1' in url3:
+                return self._extraExt1
+            return self._extraExt3
+        print('Unrecognized dem source', source)
+        raise Exception

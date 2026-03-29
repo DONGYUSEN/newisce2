@@ -1,0 +1,12 @@
+.git
+.github
+build
+dist
+__pycache__
+*.pyc
+*.pyo
+
+# Locally synced external repos not required for core ISCE2 docker build
+contrib/RelaxIV
+contrib/UnwrapComp/src/RelaxIV
+contrib/autoRIFT

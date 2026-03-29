@@ -33,8 +33,10 @@ def createParser():
             default=False, help='Use native doppler geometry')
     parser.add_argument('-l', '--legendre', dest='legendre', action='store_true',
             default=False, help='Use legendre polynomials for orbit interpolation')
-    parser.add_argument('-useGPU', '--useGPU', dest='useGPU',action='store_true', default=False,
-            help='Allow App to use GPU when available')
+    parser.add_argument('-useGPU', '--useGPU', dest='useGPU', action='store_true', default=None,
+            help='Force enabling GPU when available (default: auto-detect)')
+    parser.add_argument('-noGPU', '--noGPU', dest='useGPU', action='store_false',
+            help='Force disabling GPU')
     return parser
 
 def cmdLineParse(iargs = None):
@@ -269,12 +271,16 @@ def main(iargs=None):
     except:
         pass
 
+    if inps.useGPU is None:
+        inps.useGPU = run_GPU
+
     if inps.useGPU and not run_GPU:
         print("GPU mode requested but no GPU ISCE code found")
 
 
     # setting the respective version of geo2rdr for CPU and GPU
-    if run_GPU and inps.useGPU:
+    use_gpu_runtime = run_GPU and inps.useGPU
+    if use_gpu_runtime:
         print('GPU mode')
         runGeo2rdr = runGeo2rdrGPU
     else:
@@ -322,10 +328,19 @@ def main(iargs=None):
 
 
     ####Setup input file
-    runGeo2rdr(frame,latImage,lonImage,demImage, inps.outdir, 
-            dop=dop, nativedop = inps.native, legendre=inps.legendre,
-            azoff=azoff,rgoff=rgoff,
-            alks=inps.alks, rlks=inps.rlks)
+    try:
+        runGeo2rdr(frame,latImage,lonImage,demImage, inps.outdir,
+                dop=dop, nativedop = inps.native, legendre=inps.legendre,
+                azoff=azoff,rgoff=rgoff,
+                alks=inps.alks, rlks=inps.rlks)
+    except Exception as err:
+        if not use_gpu_runtime:
+            raise
+        print('GPU geo2rdr failed, falling back to CPU geo2rdr: {}'.format(err))
+        runGeo2rdrCPU(frame,latImage,lonImage,demImage, inps.outdir,
+                dop=dop, nativedop = inps.native, legendre=inps.legendre,
+                azoff=azoff,rgoff=rgoff,
+                alks=inps.alks, rlks=inps.rlks)
 
 
 if __name__ == '__main__':
@@ -333,4 +348,3 @@ if __name__ == '__main__':
     Main driver.
     '''
     main()
-

@@ -30,7 +30,33 @@ def write_xml(fileName,width,length,bands,dataType,scheme):
     
     return None
 
-    	    
+
+def _infer_single_band_dtype(filename, width, length):
+    """
+    Infer numeric dtype of a single-band raster from size first, then XML metadata.
+    """
+    nelems = int(width) * int(length)
+    fsize = os.path.getsize(filename)
+    if fsize == nelems * np.dtype(np.float64).itemsize:
+        return np.float64
+    if fsize == nelems * np.dtype(np.float32).itemsize:
+        return np.float32
+
+    img = isceobj.createImage()
+    img.load(filename + '.xml')
+    data_type = str(getattr(img, 'dataType', '')).upper()
+    if data_type in ('DOUBLE', 'FLOAT64'):
+        return np.float64
+    if data_type in ('FLOAT', 'FLOAT32'):
+        return np.float32
+
+    raise ValueError(
+        'Cannot infer dtype for "{0}" (size={1}, width={2}, length={3}, xml={4}).'.format(
+            filename, fsize, width, length, data_type
+        )
+    )
+
+	    	    
 def compute_FlatEarth(self,ifgFilename,width,length,radarWavelength):
     from imageMath import IML
     import logging
@@ -49,10 +75,12 @@ def compute_FlatEarth(self,ifgFilename,width,length,radarWavelength):
     
     print(rngOff)
     if os.path.exists(rngOff):
-       rng2 = np.memmap(rngOff, dtype=np.float64, mode='r', shape=(length,width))
+       rng_dtype = _infer_single_band_dtype(rngOff, width, length)
+       logger.info('compute_FlatEarth uses range offsets dtype=%s for %s', np.dtype(rng_dtype).name, rngOff)
+       rng2 = np.memmap(rngOff, dtype=rng_dtype, mode='r', shape=(length,width))
     else:
        print('No range offsets provided')
-       rng2 = np.zeros((length,width))
+       rng2 = np.zeros((length,width), dtype=np.float64)
     
     # Open the interferogram
     #ifgFilename= os.path.join(self.insar.ifgDirname, self.insar.ifgFilename)
@@ -327,4 +355,3 @@ def runInterferogram(self, igramSpectrum = "full"):
             print('Estimating dispersive phase not requested ... skipping sub-band interferograms')
             return
         runSubBandInterferograms(self) 
-

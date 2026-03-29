@@ -254,7 +254,7 @@ class IsceProc(Component, FrameMixin):
         self.geocodeFilename = 'topophase.geo'
         self.demCropFilename = 'dem.crop'
         # The strength of the Goldstein-Werner filter
-        self.filterStrength = 0.7
+        self.filterStrength = 0.6
         # This is hard-coded from the original script
         self.numberValidPulses = 2048
         self.numberPatches = None

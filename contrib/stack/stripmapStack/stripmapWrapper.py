@@ -62,6 +62,10 @@ class ConfigParser:
       elif not dictionary[key]:
         continue
       elif dictionary[key] == 'False':
+        if key == 'useGPU':
+          params.append('--noGPU')
+        elif key == 'gpu':
+          params.append('--nogpu')
         continue
       else:
         params.append('--%s'%key)
@@ -153,4 +157,3 @@ if __name__ == "__main__":
 
   # Main engine
   main(args.start,args.end)
-

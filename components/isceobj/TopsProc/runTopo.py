@@ -16,9 +16,13 @@ def runTopo(self):
 
     hasGPU= self.useGPU and self._insar.hasGPU()
     if hasGPU:
-        runTopoGPU(self)
-    else:
-        runTopoCPU(self)
+        try:
+            runTopoGPU(self)
+            return
+        except Exception as err:
+            logger.warning('GPU topo failed, falling back to CPU topo: %s', err)
+
+    runTopoCPU(self)
 
 
 
@@ -421,5 +425,4 @@ def buildVRT(srcname, dstname, dims, bbox, bands=1, dtype='FLOAT'):
                                    band=bnd+1))
 
         fid.write(tail + '\n')
-
 

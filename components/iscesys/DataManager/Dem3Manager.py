@@ -34,23 +34,25 @@ from iscesys.Component.Component import Component
 import numpy as np
 from isceobj.Image import createDemImage
 
+STEP_SRTMGL1_URL = 'https://step.esa.int/auxdata/dem/SRTMGL1'
+
 EXTRA = Component.Parameter('_extra',
-    public_name = 'extra',default = '.SRTMGL3',
+    public_name = 'extra',default = '.SRTMGL1',
     type = str,
     mandatory = False,
-    doc = 'String to append to default name such as .SRTMGL3 for dem. Since the default is set to read usgs' \
+    doc = 'String to append to default name such as .SRTMGL1 for dem. Since the default is set to read usgs' \
           +' dems if extra is empty one needs to enter a empty string "" in the xml file' \
           +' otherwise if no value is provided is then interpreted as None by the xml reader.')
 
 URL = Component.Parameter('_url',
-    public_name = 'URL',default = 'https://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL3.003/2000.02.11',
+    public_name = 'URL',default = STEP_SRTMGL1_URL,
     type = str,
     mandatory = False,
     doc = "Url for the high resolution DEM.")
 
 TILE_SIZE = Component.Parameter('_tileSize',
     public_name = 'tileSize',
-    default = [1201,1201],
+    default = [3601,3601],
     container=list,
     type=int,
     mandatory = True,
@@ -70,7 +72,7 @@ class Dem3Manager(Dem1Manager):
         self.parameter_list = self.parameter_list + super(Dem1Manager,self).parameter_list
         self.updateParameters()
         super(Dem3Manager, self).__init__(family if family else  self.__class__.family, name=name)
-        self._tileWidth = 1200
+        self._tileWidth = 3600
     def updateParameters(self):
         self.extendParameterList(Dem1Manager,Dem3Manager)
         super(Dem3Manager,self).updateParameters()

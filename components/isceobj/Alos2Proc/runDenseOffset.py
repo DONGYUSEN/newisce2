@@ -33,9 +33,15 @@ def runDenseOffset(self):
 #########################################################################################
 
     if self.useGPU and self._insar.hasGPU():
-        runDenseOffsetGPU(self)
-        #define null value. Lijun said there is actually no such null value in GPU ampcor.
-        nullValue = -10000.0
+        try:
+            runDenseOffsetGPU(self)
+            #define null value. Lijun said there is actually no such null value in GPU ampcor.
+            nullValue = -10000.0
+        except Exception as err:
+            logger.warning('GPU dense offset failed, falling back to CPU DenseAmpcor: %s', err)
+            runDenseOffsetCPU(self)
+            #define null value
+            nullValue = -10000.0
     else:
         runDenseOffsetCPU(self)
         #define null value

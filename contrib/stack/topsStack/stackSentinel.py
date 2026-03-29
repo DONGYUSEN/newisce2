@@ -17,6 +17,15 @@ from isceobj.Sensor.TOPS.Sentinel1 import Sentinel1
 from topsStack.Stack import config, run, sentinelSLC, ionParamUsr
 
 
+def _has_gpu_support():
+    try:
+        from zerodop.GPUtopozero.GPUtopozero import PyTopozero
+        from zerodop.GPUgeo2rdr.GPUgeo2rdr import PyGeo2rdr
+        return True
+    except Exception:
+        return False
+
+
 helpstr = """
 
 Stack processor for Sentinel-1 data using ISCE software.
@@ -187,8 +196,10 @@ def createParser():
 
     # computing
     compute = parser.add_argument_group('Computing options', 'Configurations for computing environment and resource')
-    compute.add_argument('-useGPU', '--useGPU', dest='useGPU',action='store_true', default=False,
-                         help='Allow App to use GPU when available')
+    compute.add_argument('-useGPU', '--useGPU', dest='useGPU', action='store_true', default=None,
+                         help='Force enabling GPU when available (default: auto-detect)')
+    compute.add_argument('-noGPU', '--noGPU', dest='useGPU', action='store_false',
+                         help='Force disabling GPU')
 
     compute.add_argument('--num_proc', '--num_process', dest='numProcess', type=int, default=1,
                          help='number of tasks running in parallel in each run file (default: %(default)s).')
@@ -216,9 +227,12 @@ def cmdLineParse(iargs = None):
     inps.aux_dirname = os.path.abspath(inps.aux_dirname)
     inps.work_dir = os.path.abspath(inps.work_dir)
     inps.dem = os.path.abspath(inps.dem)
+    if inps.useGPU is None:
+        inps.useGPU = _has_gpu_support()
 
-    if any(i in iargs for i in ['--num_proc', '--num_process']) and all(
-            i not in iargs for i in ['--num_proc4topo', '--num_process4topo']):
+    args_list = iargs or []
+    if any(i in args_list for i in ['--num_proc', '--num_process']) and all(
+            i not in args_list for i in ['--num_proc4topo', '--num_process4topo']):
         inps.numProcess4topo = inps.numProcess
 
     return inps

@@ -37,8 +37,9 @@ from iscesys.Component.Component import Component, Port
 class DefaultDopp(Component):
    
     def calculateDoppler(self):
-        print('Using default doppler values for sensor: %s'%(self._sensor.__class__.__name__))
         self.activateInputPorts()
+        sensor_name = self._sensor.__class__.__name__ if (self._sensor is not None) else 'UNKNOWN'
+        print('Using default doppler values for sensor: %s' % (sensor_name))
         pass
 
     def fitDoppler(self):

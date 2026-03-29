@@ -1,1 +1,1 @@
-stanford_license = None
+stanford_license = 1

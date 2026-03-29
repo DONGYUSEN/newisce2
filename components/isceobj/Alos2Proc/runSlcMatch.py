@@ -50,14 +50,21 @@ def runSlcMatch(self):
     # compute geometric offsets
     ##################################################
     if self.useGPU and self._insar.hasGPU():
-        topoGPU(referenceTrack, 1, 1, demFile, 
-                       'lat.rdr', 'lon.rdr', 'hgt.rdr', 'los.rdr')
-        geo2RdrGPU(secondaryTrack, 1, 1, 
-            'lat.rdr', 'lon.rdr', 'hgt.rdr', 'rg.off', 'az.off')
+        try:
+            topoGPU(referenceTrack, 1, 1, demFile,
+                           'lat.rdr', 'lon.rdr', 'hgt.rdr', 'los.rdr')
+            geo2RdrGPU(secondaryTrack, 1, 1,
+                'lat.rdr', 'lon.rdr', 'hgt.rdr', 'rg.off', 'az.off')
+        except Exception as err:
+            logger.warning('GPU geometric coreg failed, falling back to CPU topo/geo2rdr: %s', err)
+            topoCPU(referenceTrack, 1, 1, demFile,
+                           'lat.rdr', 'lon.rdr', 'hgt.rdr', 'los.rdr')
+            geo2RdrCPU(secondaryTrack, 1, 1,
+                'lat.rdr', 'lon.rdr', 'hgt.rdr', 'rg.off', 'az.off')
     else:
-        topoCPU(referenceTrack, 1, 1, demFile, 
+        topoCPU(referenceTrack, 1, 1, demFile,
                        'lat.rdr', 'lon.rdr', 'hgt.rdr', 'los.rdr')
-        geo2RdrCPU(secondaryTrack, 1, 1, 
+        geo2RdrCPU(secondaryTrack, 1, 1,
             'lat.rdr', 'lon.rdr', 'hgt.rdr', 'rg.off', 'az.off')
 
 
@@ -268,5 +275,4 @@ def runSlcMatch(self):
     os.chdir('../')
     catalog.printToLog(logger, "runSlcMatch")
     self._insar.procDoc.addAllFromCatalog(catalog)
-
 

@@ -54,6 +54,11 @@ extern "C"
     PyObject *setMaxComponents_C(PyObject *self, PyObject *args);
     PyObject *setRangeLooks_C(PyObject *self, PyObject *args);
     PyObject *setAzimuthLooks_C(PyObject *self, PyObject *args);
+    PyObject *setNProc_C(PyObject *self, PyObject *args);
+    PyObject *setTileNRow_C(PyObject *self, PyObject *args);
+    PyObject *setTileNCol_C(PyObject *self, PyObject *args);
+    PyObject *setRowOverlap_C(PyObject *self, PyObject *args);
+    PyObject *setColOverlap_C(PyObject *self, PyObject *args);
     PyObject *setInitOnly_C(PyObject *self, PyObject *args);
     PyObject *setRegrowComponents_C(PyObject *self, PyObject *args);
     PyObject *setUnwrappedInput_C(PyObject *self, PyObject *args);
@@ -83,6 +88,11 @@ static PyMethodDef snaphu_methods[] =
     {"setMaxComponents_Py", setMaxComponents_C,METH_VARARGS," "},
     {"setRangeLooks_Py", setRangeLooks_C, METH_VARARGS, " "},
     {"setAzimuthLooks_Py", setAzimuthLooks_C, METH_VARARGS, " "},
+    {"setNProc_Py", setNProc_C, METH_VARARGS, " "},
+    {"setTileNRow_Py", setTileNRow_C, METH_VARARGS, " "},
+    {"setTileNCol_Py", setTileNCol_C, METH_VARARGS, " "},
+    {"setRowOverlap_Py", setRowOverlap_C, METH_VARARGS, " "},
+    {"setColOverlap_Py", setColOverlap_C, METH_VARARGS, " "},
     {"setInitOnly_Py", setInitOnly_C, METH_VARARGS, " "},
     {"setRegrowComponents_Py", setRegrowComponents_C, METH_VARARGS, " "},
     {"setUnwrappedInput_Py", setUnwrappedInput_C, METH_VARARGS, " "},

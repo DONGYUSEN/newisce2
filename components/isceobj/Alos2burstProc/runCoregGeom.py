@@ -76,14 +76,24 @@ def runCoregGeom(self):
             secondaryTrack.azimuthLineInterval = secondarySwath.azimuthLineInterval
 
             if self.useGPU and self._insar.hasGPU():
-                topoGPU(referenceTrack, 1, 1, demFile, 
-                               self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.los)
-                geo2RdrGPU(secondaryTrack, 1, 1, 
-                    self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.rangeOffset, self._insar.azimuthOffset)
+                try:
+                    topoGPU(referenceTrack, 1, 1, demFile,
+                                   self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.los)
+                    geo2RdrGPU(secondaryTrack, 1, 1,
+                        self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.rangeOffset, self._insar.azimuthOffset)
+                except Exception as err:
+                    logger.warning(
+                        'GPU geometric coreg failed for frame %s swath %s, '
+                        'falling back to CPU topo/geo2rdr: %s',
+                        frameNumber, swathNumber, err)
+                    topoCPU(referenceTrack, 1, 1, demFile,
+                                   self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.los)
+                    geo2RdrCPU(secondaryTrack, 1, 1,
+                        self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.rangeOffset, self._insar.azimuthOffset)
             else:
-                topoCPU(referenceTrack, 1, 1, demFile, 
+                topoCPU(referenceTrack, 1, 1, demFile,
                                self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.los)
-                geo2RdrCPU(secondaryTrack, 1, 1, 
+                geo2RdrCPU(secondaryTrack, 1, 1,
                     self._insar.latitude, self._insar.longitude, self._insar.height, self._insar.rangeOffset, self._insar.azimuthOffset)
 
             waterBodyRadar(self._insar.latitude, self._insar.longitude, wbdFile, self._insar.wbdOut)
@@ -137,6 +147,5 @@ def runCoregGeom(self):
 ###############################################################################
     catalog.printToLog(logger, "runCoregGeom")
     self._insar.procDoc.addAllFromCatalog(catalog)
-
 
 

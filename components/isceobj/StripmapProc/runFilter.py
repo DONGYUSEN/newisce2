@@ -41,6 +41,59 @@ import os
 
 logger = logging.getLogger('isce.insar.runFilter')
 
+def _validated_alpha(alpha, context):
+    if alpha is None:
+        raise ValueError('Filter strength is not set for {0}.'.format(context))
+
+    try:
+        alpha = float(alpha)
+    except (TypeError, ValueError):
+        raise ValueError('Invalid filter strength "{0}" for {1}.'.format(alpha, context))
+
+    if alpha < 0.0 or alpha > 1.0:
+        raise ValueError(
+            'Filter strength must be in [0, 1], got {0} for {1}.'.format(alpha, context)
+        )
+
+    if alpha < 0.5 or alpha > 0.8:
+        logger.warning(
+            'Filter strength %.3f for %s is outside recommended [0.5, 0.8] for topographic '
+            'stripe suppression.',
+            alpha,
+            context,
+        )
+
+    return alpha
+
+def _validate_interferogram(filename, context):
+    xmlname = filename + '.xml'
+    if (not os.path.isfile(filename)) or os.path.getsize(filename) == 0:
+        raise RuntimeError(
+            'Missing or empty interferogram "{0}" for {1}.'.format(filename, context)
+        )
+
+    if not os.path.isfile(xmlname):
+        raise RuntimeError(
+            'Missing interferogram metadata "{0}" for {1}.'.format(xmlname, context)
+        )
+
+    int_meta = isceobj.createIntImage()
+    int_meta.load(xmlname)
+    width = int_meta.getWidth()
+    if (width is None) or (width <= 0):
+        raise RuntimeError(
+            'Invalid interferogram width ({0}) in "{1}" for {2}.'.format(
+                width, xmlname, context
+            )
+        )
+    return width
+
+def _validate_output(filename, context):
+    if (not os.path.isfile(filename)) or os.path.getsize(filename) == 0:
+        raise RuntimeError(
+            'Filtering produced missing/empty output "{0}" for {1}.'.format(filename, context)
+        )
+
 def runFilter(self, filterStrength, igramSpectrum = "full"):
     logger.info("Applying power-spectral filter")
 
@@ -61,12 +114,12 @@ def runFilter(self, filterStrength, igramSpectrum = "full"):
             return
         logger.info("Filtering the high-band interferogram")
         ifgDirname = os.path.join(self.insar.ifgDirname, self.insar.highBandSlcDirname)
+    else:
+        raise ValueError('Unknown interferogram spectrum "{0}".'.format(igramSpectrum))
 
     topoflatIntFilename = os.path.join(ifgDirname , self.insar.ifgFilename)
-
-    img1 = isceobj.createImage()
-    img1.load(topoflatIntFilename + '.xml')
-    widthInt = img1.getWidth()
+    context = 'StripmapProc.runFilter ({0})'.format(igramSpectrum)
+    widthInt = _validate_interferogram(topoflatIntFilename, context)
 
     intImage = isceobj.createIntImage()
     intImage.setFilename(topoflatIntFilename)
@@ -88,10 +141,12 @@ def runFilter(self, filterStrength, igramSpectrum = "full"):
     if filterStrength is not None:
         self.insar.filterStrength = filterStrength
 
-    objFilter.goldsteinWerner(alpha=self.insar.filterStrength)
+    alpha = _validated_alpha(self.insar.filterStrength, context)
+    objFilter.goldsteinWerner(alpha=alpha)
 
     intImage.finalizeImage()
     filtImage.finalizeImage()
+    _validate_output(filtIntFilename, context)
     del filtImage
     
     #Create phase sigma correlation file here
@@ -143,4 +198,5 @@ def runFilter(self, filterStrength, igramSpectrum = "full"):
 
 
     # Set the filtered image to be the one geocoded
-    # self.insar.topophaseFlatFilename = filtIntFilename
+    if igramSpectrum == "full":
+        self.insar.topophaseFlatFilename = filtIntFilename

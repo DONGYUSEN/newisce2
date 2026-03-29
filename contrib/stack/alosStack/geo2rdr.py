@@ -42,8 +42,10 @@ def cmdLineParse():
             help = 'number of azimuth looks 1. default: 1')
     #parser.add_argument('-gpu', dest='gpu', type=int, default=1,
     #        help = 'use GPU when available. 0: no. 1: yes (default)')
-    parser.add_argument('-gpu', dest='gpu', action='store_true', default=False,
-            help='use GPU when available')
+    parser.add_argument('-gpu', '--gpu', dest='gpu', action='store_true', default=None,
+            help='force enabling GPU (default: auto-detect)')
+    parser.add_argument('-nogpu', '--nogpu', dest='gpu', action='store_false',
+            help='force disabling GPU')
 
     if len(sys.argv) <= 1:
         print('')
@@ -66,7 +68,12 @@ if __name__ == '__main__':
     height = os.path.join('../', inps.hgt)
     numberRangeLooks1 = inps.nrlks1
     numberAzimuthLooks1 = inps.nalks1
+    gpuAvailable = hasGPU()
     useGPU = inps.gpu
+    if useGPU is None:
+        useGPU = gpuAvailable
+    if useGPU and not gpuAvailable:
+        print('GPU mode requested but no GPU ISCE code found')
     #######################################################
 
     insarDir = 'insar'
@@ -106,11 +113,17 @@ if __name__ == '__main__':
 
 
     track = loadTrack(dateParDir, date)
-    if useGPU and hasGPU():
-        geo2RdrGPU(track, numberRangeLooks1, numberAzimuthLooks1, 
-            latitude, longitude, height, rangeOffset, azimuthOffset)
+    use_gpu_runtime = useGPU and gpuAvailable
+    if use_gpu_runtime:
+        try:
+            geo2RdrGPU(track, numberRangeLooks1, numberAzimuthLooks1,
+                latitude, longitude, height, rangeOffset, azimuthOffset)
+        except Exception as err:
+            print('GPU geo2rdr failed, falling back to CPU geo2rdr: {}'.format(err))
+            geo2RdrCPU(track, numberRangeLooks1, numberAzimuthLooks1,
+                latitude, longitude, height, rangeOffset, azimuthOffset)
     else:
-        geo2RdrCPU(track, numberRangeLooks1, numberAzimuthLooks1, 
+        geo2RdrCPU(track, numberRangeLooks1, numberAzimuthLooks1,
             latitude, longitude, height, rangeOffset, azimuthOffset)
 
 
@@ -129,4 +142,3 @@ if __name__ == '__main__':
         os.remove(os.path.basename(height))
         os.remove(os.path.basename(height)+'.vrt')
         os.remove(os.path.basename(height)+'.xml')
-

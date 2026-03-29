@@ -37,8 +37,10 @@ def createParser():
             default=False, help='Products in native doppler geometry instead of zero doppler')
     parser.add_argument('-l','--legendre', dest='legendre', action='store_true',
             default=False, help='Use legendre interpolation instead of hermite')
-    parser.add_argument('-useGPU', '--useGPU', dest='useGPU',action='store_true', default=False,
-            help='Allow App to use GPU when available')
+    parser.add_argument('-useGPU', '--useGPU', dest='useGPU', action='store_true', default=None,
+            help='Force enabling GPU when available (default: auto-detect)')
+    parser.add_argument('-noGPU', '--noGPU', dest='useGPU', action='store_false',
+            help='Force disabling GPU')
 
     return parser
 
@@ -486,11 +488,15 @@ def main(iargs=None):
     except:
         pass
 
+    if inps.useGPU is None:
+        inps.useGPU = run_GPU
+
     if inps.useGPU and not run_GPU:
         print("GPU mode requested but no GPU ISCE code found")
 
     # setting the respective version of geo2rdr for CPU and GPU
-    if run_GPU and inps.useGPU:
+    use_gpu_runtime = run_GPU and inps.useGPU
+    if use_gpu_runtime:
         print('GPU mode')
         runTopo = runTopoGPU
     else:
@@ -522,7 +528,13 @@ def main(iargs=None):
     info.incFilename = os.path.join(info.outdir, 'incLocal.rdr')
     info.maskFilename = os.path.join(info.outdir, 'shadowMask.rdr')
 
-    runTopo(info,demImage,dop=doppler,nativedop=inps.nativedop, legendre=inps.legendre)
+    try:
+        runTopo(info,demImage,dop=doppler,nativedop=inps.nativedop, legendre=inps.legendre)
+    except Exception as err:
+        if not use_gpu_runtime:
+            raise
+        print('GPU topo failed, falling back to CPU topo: {}'.format(err))
+        runTopoCPU(info,demImage,dop=doppler,nativedop=inps.nativedop, legendre=inps.legendre)
     runSimamp(os.path.dirname(info.heightFilename),os.path.basename(info.heightFilename))
 
     # write multilooked geometry files in "geom_reference" directory, same level as "Igrams"

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component>
+  <!-- 方式一（推荐）：直接给 SAFE 目录或 zip -->
+  <property name="safe">
+    <value>/path/to/reference/TIANYI_REFERENCE.SAFE</value>
+  </property>
+
+  <!-- 极化方式（按数据实际情况填写：vv/vh/hh/hv） -->
+  <property name="polarization">vv</property>
+
+  <!-- 轨道目录（二选一，优先目录；程序会自动匹配） -->
+  <property name="orbit directory">
+    <value>/path/to/orbit_dir</value>
+  </property>
+
+  <!-- 轨道文件（可选；若已设置 orbit directory，可不填） -->
+  <!--
+  <property name="orbit file">
+    <value>/path/to/orbit_file.EOF</value>
+  </property>
+  -->
+
+  <!-- 输出短名 -->
+  <property name="OUTPUT">
+    <value>reference</value>
+  </property>
+
+  <!--
+    方式二（若不走 SAFE，可改为 xml+tiff）：
+    <property name="xml">/path/to/annotation.xml</property>
+    <property name="tiff">/path/to/measurement.tiff</property>
+  -->
+</component>

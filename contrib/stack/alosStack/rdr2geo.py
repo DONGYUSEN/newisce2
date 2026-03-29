@@ -39,8 +39,10 @@ def cmdLineParse():
             help = 'number of azimuth looks 1. default: 1')
     #parser.add_argument('-gpu', dest='gpu', type=int, default=1,
     #        help = 'use GPU when available. 0: no. 1: yes (default)')
-    parser.add_argument('-gpu', dest='gpu', action='store_true', default=False,
-            help='use GPU when available')
+    parser.add_argument('-gpu', '--gpu', dest='gpu', action='store_true', default=None,
+            help='force enabling GPU (default: auto-detect)')
+    parser.add_argument('-nogpu', '--nogpu', dest='gpu', action='store_false',
+            help='force disabling GPU')
 
     if len(sys.argv) <= 1:
         print('')
@@ -61,7 +63,12 @@ if __name__ == '__main__':
     wbdFile = inps.wbd
     numberRangeLooks1 = inps.nrlks1
     numberAzimuthLooks1 = inps.nalks1
+    gpuAvailable = hasGPU()
     useGPU = inps.gpu
+    if useGPU is None:
+        useGPU = gpuAvailable
+    if useGPU and not gpuAvailable:
+        print('GPU mode requested but no GPU ISCE code found')
     #######################################################
 
     demFile = os.path.abspath(demFile)
@@ -81,12 +88,16 @@ if __name__ == '__main__':
 
 
     track = loadTrack('../', date)
-    if useGPU and hasGPU():
-        topoGPU(track, numberRangeLooks1, numberAzimuthLooks1, demFile, 
-                       latitude, longitude, height, los)
+    use_gpu_runtime = useGPU and gpuAvailable
+    if use_gpu_runtime:
+        try:
+            topoGPU(track, numberRangeLooks1, numberAzimuthLooks1, demFile,
+                           latitude, longitude, height, los)
+        except Exception as err:
+            print('GPU topo failed, falling back to CPU topo: {}'.format(err))
+            snwe = topoCPU(track, numberRangeLooks1, numberAzimuthLooks1, demFile,
+                           latitude, longitude, height, los)
     else:
-        snwe = topoCPU(track, numberRangeLooks1, numberAzimuthLooks1, demFile, 
+        snwe = topoCPU(track, numberRangeLooks1, numberAzimuthLooks1, demFile,
                        latitude, longitude, height, los)
     waterBodyRadar(latitude, longitude, wbdFile, wbdOut)
-
-

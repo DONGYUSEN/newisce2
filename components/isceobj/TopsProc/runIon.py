@@ -388,16 +388,37 @@ def subband(self, ionParam):
     from contrib.alos2proc.alos2proc import rg_filter
 
     # decide whether to use CPU or GPU
+    from isceobj.TopsProc.runFineResamp import resampSecondaryCPU
+    from isceobj.TopsProc.runFineResamp import resampSecondaryGPU
     hasGPU = self.useGPU and self._insar.hasGPU()
     if hasGPU:
-        from isceobj.TopsProc.runFineResamp import resampSecondaryGPU as resampSecondary
+        resampSecondary = resampSecondaryGPU
+        usingGPU = True
         print('Using GPU for fineresamp')
     else:
-        from isceobj.TopsProc.runFineResamp import resampSecondaryCPU as resampSecondary
+        resampSecondary = resampSecondaryCPU
+        usingGPU = False
 
     from isceobj.TopsProc.runFineResamp import getRelativeShifts
     from isceobj.TopsProc.runFineResamp import adjustValidSampleLine
     from isceobj.TopsProc.runFineResamp import getValidLines
+
+    def _resamp_secondary_with_fallback(referenceBurst, secondaryBurst, rdict, outname, swath, burstIndex):
+        nonlocal resampSecondary
+        nonlocal usingGPU
+
+        try:
+            return resampSecondary(referenceBurst, secondaryBurst, rdict, outname)
+        except Exception as err:
+            if not usingGPU:
+                raise
+
+            logger.warning(
+                'GPU fineresamp failed during ion subband for IW%d burst %d, '
+                'falling back to CPU resamp: %s', swath, burstIndex, err)
+            resampSecondary = resampSecondaryCPU
+            usingGPU = False
+            return resampSecondary(referenceBurst, secondaryBurst, rdict, outname)
 
     #from isceobj.TopsProc.runBurstIfg import adjustValidLineSample
 
@@ -551,7 +572,8 @@ def subband(self, ionParam):
                     slvBurstResamp2.image.filename = os.path.join(upperDir, 'reference_'+os.path.basename(masBurst.image.filename))
                     outname = os.path.join(upperDir, 'secondary_resamp_'+os.path.basename(slvBurst.image.filename))
                     ifgdir = upperDir
-                outimg = resampSecondary(masBurst2, slvBurst2, rdict, outname)
+                outimg = _resamp_secondary_with_fallback(
+                    masBurst2, slvBurst2, rdict, outname, swath, ii + 1)
                 minAz, maxAz, minRg, maxRg = getValidLines(slvBurst2, rdict, outname,
                         misreg_az = misreg_az - offset, misreg_rng = misreg_rg)
                 adjustValidSampleLine(slvBurstResamp2, slvBurst2,

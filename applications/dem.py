@@ -33,7 +33,131 @@ import isce
 import sys
 import os
 import argparse
+import subprocess
 from contrib.demUtils import createDemStitcher
+
+STEP_SRTMGL1_URL = 'https://step.esa.int/auxdata/dem/SRTMGL1'
+
+
+def _refresh_isce_metadata(dem_path):
+    '''
+    Recreate ISCE XML/VRT metadata from a GDAL-readable DEM.
+    '''
+    script = os.path.join(os.path.dirname(__file__), 'gdal2isce_xml.py')
+    if not os.path.isfile(script):
+        return
+
+    try:
+        subprocess.run([sys.executable, script, '-i', dem_path], check=True)
+    except Exception as err:
+        print('WARNING: could not refresh ISCE metadata for {}: {}'.format(dem_path, err))
+
+
+def _fill_nodata_inplace(dem_path, filling_value=-32768, max_search_dist_px=100, smoothing_iters=0):
+    '''
+    Fill nodata holes in-place using GDAL FillNodata.
+    '''
+    try:
+        from osgeo import gdal
+    except Exception as err:
+        print('WARNING: GDAL unavailable, skip nodata filling for {}: {}'.format(dem_path, err))
+        return 0
+
+    ds = gdal.Open(dem_path, gdal.GA_Update)
+    if ds is None:
+        return 0
+
+    band = ds.GetRasterBand(1)
+    nodata = band.GetNoDataValue()
+    if nodata is None:
+        nodata = filling_value
+        band.SetNoDataValue(nodata)
+
+    arr = band.ReadAsArray()
+    if arr is None:
+        ds = None
+        return 0
+
+    try:
+        import numpy as np
+        missing = int((arr == nodata).sum())
+        valid_mask = (arr != nodata).astype(np.uint8) * 255
+    except Exception:
+        ds = None
+        return 0
+
+    if missing == 0:
+        ds = None
+        return 0
+
+    mask_ds = gdal.GetDriverByName('MEM').Create('', ds.RasterXSize, ds.RasterYSize, 1, gdal.GDT_Byte)
+    mask_band = mask_ds.GetRasterBand(1)
+    mask_band.WriteArray(valid_mask)
+    gdal.FillNodata(targetBand=band, maskBand=mask_band, maxSearchDist=max_search_dist_px, smoothingIterations=smoothing_iters)
+    ds.FlushCache()
+    ds = None
+    mask_ds = None
+    print('Filled nodata pixels: {} ({})'.format(missing, dem_path))
+    return missing
+
+
+def _coerce_dem_to_int16(dem_path, filling_value=-32768):
+    '''
+    Convert FLOAT DEMs to Int16 in place to keep downstream topo stable.
+    '''
+    try:
+        from osgeo import gdal
+    except Exception as err:
+        print('WARNING: GDAL unavailable, skip Int16 conversion for {}: {}'.format(dem_path, err))
+        return
+
+    ds = gdal.Open(dem_path, gdal.GA_ReadOnly)
+    if ds is None:
+        return
+
+    band = ds.GetRasterBand(1)
+    dtype = band.DataType
+    if dtype == gdal.GDT_Int16:
+        ds = None
+        return
+
+    if dtype not in (gdal.GDT_Float32, gdal.GDT_Float64):
+        print('WARNING: DEM type {} for {} is not FLOAT/Int16; leaving unchanged'.format(dtype, dem_path))
+        ds = None
+        return
+
+    driver_name = ds.GetDriver().ShortName
+    tmp_path = dem_path + '.int16tmp'
+
+    nodata = band.GetNoDataValue()
+    if nodata is None:
+        nodata = filling_value
+
+    opts = gdal.TranslateOptions(
+        format=driver_name,
+        outputType=gdal.GDT_Int16,
+        noData=filling_value
+    )
+    out = gdal.Translate(tmp_path, ds, options=opts)
+    ds = None
+    if out is None:
+        raise RuntimeError('Failed to convert {} to Int16'.format(dem_path))
+    out = None
+
+    os.replace(tmp_path, dem_path)
+
+    for ext in ('.hdr', '.aux.xml'):
+        src = tmp_path + ext
+        if os.path.exists(src):
+            os.replace(src, dem_path + ext)
+
+    for ext in ('.xml', '.vrt'):
+        path = dem_path + ext
+        if os.path.exists(path):
+            os.remove(path)
+
+    _refresh_isce_metadata(dem_path)
+    print('Converted DEM to Int16: {}'.format(dem_path))
 
 
 def main():
@@ -98,6 +222,17 @@ def main():
     if(args.type == 'nasadem'):
         args.source == 1
 
+    # Use public ESA STEP mirror by default (no password required).
+    # STEP provides SRTMGL1 tiles, so source=3 falls back to SRTMGL1 naming/url.
+    if (not args.url) and (args.type == 'version3'):
+        ds._url1 = STEP_SRTMGL1_URL
+        ds._url3 = STEP_SRTMGL1_URL
+        ds._extraExt3 = ds._extraExt1
+        if args.source == 3:
+            print('source=3 requested; using public SRTMGL1 mirror as fallback: {}'.format(ds._url3))
+        else:
+            print('Using default public DEM URL: {}'.format(ds._url1))
+
     if(args.url):
         if(args.type == 'version3'):
             if(args.source == 1):
@@ -136,11 +271,16 @@ def main():
             if not(ds.stitchDems(lat,lon,args.source,args.output,args.dir,keep=args.keep)):
                 print('Could not create a stitched DEM. Some tiles are missing')
             else:
+                stitched_path = os.path.abspath(os.path.join(args.dir, args.output))
+                _fill_nodata_inplace(stitched_path, filling_value=args.fillingValue)
+                _coerce_dem_to_int16(stitched_path, filling_value=args.fillingValue)
                 if(args.correct):
                     #ds.correct(args.output,args.source,width,min(lat[0],lat[1]),min(lon[0],lon[1]))
                     demImg = ds.correct()
                     # replace filename with full path including dir in which file is located
                     demImg.filename = os.path.abspath(os.path.join(args.dir, demImg.filename))
+                    _fill_nodata_inplace(demImg.filename, filling_value=args.fillingValue)
+                    _coerce_dem_to_int16(demImg.filename, filling_value=args.fillingValue)
                     demImg.setAccessMode('READ')
                     demImg.renderHdr()
         else:

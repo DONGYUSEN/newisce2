@@ -311,9 +311,11 @@ def runFineResamp(self):
 
     if hasGPU:
         resampSecondary = resampSecondaryGPU
+        usingGPU = True
         print('Using GPU for fineresamp')
     else:
         resampSecondary = resampSecondaryCPU
+        usingGPU = False
 
 
     swathList = self._insar.getValidSwathList(self.swaths)
@@ -389,7 +391,18 @@ def runFineResamp(self):
             rdict['carrPoly'] = azCarrPoly
             rdict['doppPoly'] = dpoly
 
-            outimg = resampSecondary(referenceBurst, secondaryBurst, rdict, outname)
+            try:
+                outimg = resampSecondary(referenceBurst, secondaryBurst, rdict, outname)
+            except Exception as err:
+                if not usingGPU:
+                    raise
+
+                logger.warning(
+                    'GPU fineresamp failed for IW%d burst %d, falling back to CPU resamp: %s',
+                    swath, ii + 1, err)
+                resampSecondary = resampSecondaryCPU
+                usingGPU = False
+                outimg = resampSecondary(referenceBurst, secondaryBurst, rdict, outname)
 
             minAz, maxAz, minRg, maxRg = getValidLines(secondaryBurst, rdict, outname,
                     misreg_az = misreg_az - offset, misreg_rng = misreg_rg)

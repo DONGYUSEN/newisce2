@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<insarApp>
+  <component name="insar">
+    <!-- 传感器类型：LUTAN1（建议参考与辅影像保持一致） -->
+    <property name="sensor name">LUTAN1</property>
+
+    <!-- 参考影像参数文件 -->
+    <component name="reference">
+      <catalog>reference_LUTAN1_cn.xml</catalog>
+    </component>
+
+    <!-- 辅影像参数文件 -->
+    <component name="secondary">
+      <catalog>secondary_LUTAN1_cn.xml</catalog>
+    </component>
+
+    <!-- DEM 文件（建议填绝对路径） -->
+    <property name="demFilename">/path/to/dem.dem.wgs84</property>
+
+    <!-- Lutan1 处理建议使用 useDEFAULT（已按 SLC 元数据方式处理） -->
+    <property name="reference doppler method">useDEFAULT</property>
+    <property name="secondary doppler method">useDEFAULT</property>
+
+    <!-- GPU 优先：当代码路径支持 GPU 时优先使用，失败自动回退 -->
+    <property name="use GPU">True</property>
+
+    <!-- 是否执行密集配准（dense offsets），建议打开 -->
+    <property name="do denseoffsets">True</property>
+
+    <!-- 你当前需求：方位向 rubbersheet 默认关闭 -->
+    <property name="do rubbersheetingAzimuth">False</property>
+    <!-- 距离向 rubbersheet 可按需要开启/关闭 -->
+    <property name="do rubbersheetingRange">False</property>
+
+    <!-- 可选：解缠方式 -->
+    <property name="do unwrap">True</property>
+    <property name="unwrapper name">snaphu</property>
+
+    <!--
+      说明（Lutan1）：
+      1) 该分支已配置为 Native Doppler 处理链（非 Zero-Doppler）。
+      2) 如需做 Native vs Zero-Doppler 严格 A/B，可保留本模板为 Native 组，
+         另复制一份并在代码/流程侧切换到 Zero-Doppler 对照组。
+    -->
+  </component>
+</insarApp>

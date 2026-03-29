@@ -124,7 +124,7 @@ PEG_RAD = Application.Parameter(
 FILTER_STRENGTH = Application.Parameter(
     'filterStrength',
     public_name='filter strength',
-    default = None,
+    default = 0.6,
     type=float,
     mandatory=False,
     doc='Goldstein Werner Filter strength'

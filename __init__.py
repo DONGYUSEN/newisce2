@@ -32,11 +32,60 @@ version = release_history # compatibility alias
 __version__ = release_version
 
 import sys, os
+import tempfile
 isce_path = os.path.dirname(os.path.abspath(__file__))
 
 import logging
 from logging.config import fileConfig as _fc
-_fc(os.path.join(isce_path, 'defaults', 'logging', 'logging.conf'))
+
+
+def _safe_abspath(path_text):
+    """
+    Resolve absolute path without assuming current working directory is valid.
+    """
+    if os.path.isabs(path_text):
+        return path_text
+    try:
+        return os.path.abspath(path_text)
+    except FileNotFoundError:
+        return os.path.join(tempfile.gettempdir(), path_text)
+
+
+def _resolve_log_file(default_name='isce.log'):
+    """
+    Resolve writable log file path without binding to a fixed project directory.
+    Priority:
+      1) ISCE_LOG_FILE
+      2) ISCE_LOG_DIR + default_name
+      3) CWD + default_name
+      4) tempfile.gettempdir() + default_name
+    """
+    log_file = os.environ.get('ISCE_LOG_FILE')
+    if log_file:
+        out = _safe_abspath(log_file)
+    else:
+        log_dir = os.environ.get('ISCE_LOG_DIR')
+        if log_dir:
+            out = _safe_abspath(os.path.join(log_dir, default_name))
+        else:
+            try:
+                out = os.path.join(os.getcwd(), default_name)
+            except FileNotFoundError:
+                out = os.path.join(tempfile.gettempdir(), default_name)
+
+    log_parent = os.path.dirname(out)
+    if log_parent:
+        try:
+            os.makedirs(log_parent, exist_ok=True)
+        except Exception:
+            pass
+    return out
+
+
+_fc(
+    os.path.join(isce_path, 'defaults', 'logging', 'logging.conf'),
+    defaults={'ISCE_LOG_FILE': _resolve_log_file()},
+)
 
 sys.path.insert(1,isce_path)
 sys.path.insert(1,os.path.join(isce_path,'applications'))

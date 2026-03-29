@@ -32,6 +32,7 @@
 
 from iscesys.Component.Component import Component
 from . import snaphu
+import os
 
 ALTITUDE = Component.Parameter(
     'altitude',
@@ -282,7 +283,28 @@ class Snaphu(Component):
         super(Snaphu, self).__init__(family if family else  self.__class__.family, name=name)
         self.minConnectedComponentFrac = 0.01
         self.connectedComponentCostThreshold = 300
-        self.magnitude = None 
+        self.magnitude = None
+        # Runtime tuning knobs for parallel/tiled unwrapping.
+        # These can be configured via setters or environment variables.
+        self.nproc = self._safe_env_int('ISCE_SNAPHU_NPROC', 1, minimum=1)
+        self.tileNRow = self._safe_env_int('ISCE_SNAPHU_NTILEROW', 1, minimum=1)
+        self.tileNCol = self._safe_env_int('ISCE_SNAPHU_NTILECOL', 1, minimum=1)
+        self.rowOverlap = self._safe_env_int('ISCE_SNAPHU_ROWOVRLP', 0, minimum=0)
+        self.colOverlap = self._safe_env_int('ISCE_SNAPHU_COLOVRLP', 0, minimum=0)
+
+    def _safe_env_int(self, key, default, minimum=None):
+        value = os.environ.get(key)
+        if value is None:
+            return default
+        try:
+            parsed = int(value)
+        except Exception:
+            self.logger.warning('Invalid %s=%r; using default %s', key, value, default)
+            return default
+        if (minimum is not None) and (parsed < minimum):
+            self.logger.warning('%s=%s is below minimum %s; using %s', key, parsed, minimum, default)
+            return default
+        return parsed
         
 
     def setCorrfile(self, corrfile):
@@ -318,6 +340,21 @@ class Snaphu(Component):
 
     def setAzimuthLooks(self, looks):
         self.azimuthLooks = looks
+
+    def setNProc(self, nproc):
+        self.nproc = int(nproc)
+
+    def setTileNRow(self, nrows):
+        self.tileNRow = int(nrows)
+
+    def setTileNCol(self, ncols):
+        self.tileNCol = int(ncols)
+
+    def setRowOverlap(self, overlap):
+        self.rowOverlap = int(overlap)
+
+    def setColOverlap(self, overlap):
+        self.colOverlap = int(overlap)
    
     def setIntFileFormat(self, instr):
         self.intFileFormat = str(instr)
@@ -392,6 +429,16 @@ class Snaphu(Component):
         snaphu.setMaxComponents_Py(self.maxComponents)
         snaphu.setRangeLooks_Py(int(self.rangeLooks))
         snaphu.setAzimuthLooks_Py(int(self.azimuthLooks))
+        if hasattr(snaphu, 'setNProc_Py'):
+            snaphu.setNProc_Py(int(self.nproc))
+        if hasattr(snaphu, 'setTileNRow_Py'):
+            snaphu.setTileNRow_Py(int(self.tileNRow))
+        if hasattr(snaphu, 'setTileNCol_Py'):
+            snaphu.setTileNCol_Py(int(self.tileNCol))
+        if hasattr(snaphu, 'setRowOverlap_Py'):
+            snaphu.setRowOverlap_Py(int(self.rowOverlap))
+        if hasattr(snaphu, 'setColOverlap_Py'):
+            snaphu.setColOverlap_Py(int(self.colOverlap))
         snaphu.setMinConnectedComponentFraction_Py(int(self.minConnectedComponentFrac))
         snaphu.setConnectedComponentThreshold_Py(int(self.connectedComponentCostThreshold))
         snaphu.setIntFileFormat_Py( int(self.fileFormats[self.intFileFormat]))

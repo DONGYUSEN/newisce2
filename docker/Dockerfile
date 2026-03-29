@@ -1,27 +1,49 @@
-FROM ubuntu:20.04 as builder
+FROM ubuntu:22.04 AS builder
 
 # Set an encoding to make things work smoothly.
-ENV LANG en_US.UTF-8
-ENV TZ US/Pacific
+ENV LANG=en_US.UTF-8
+ENV TZ=Asia/Shanghai
 ARG DEBIAN_FRONTEND=noninteractive
+
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
 RUN set -ex \
  && apt-get update \
  && apt-get install -y \
+    build-essential \
     cmake \
     cython3 \
     gfortran \
     git \
+    snaphu \
+    aria2 \
+    libhdf5-dev \
+    libhdf4-alt-dev \
+    hdf5-tools \
+    hdf4-tools \
+    libopencv-dev \
+    libx11-dev \
+    libmotif-dev \
     libfftw3-dev \
     libgdal-dev \
     libhdf4-alt-dev \
     libhdf5-dev \
+    libxm4 \
     libopencv-dev \
     ninja-build \
+    libmotif-dev \
     python3-gdal \
     python3-h5py \
     python3-numpy \
+    python3-opencv \
+    python3-pip \
     python3-scipy \
+    python3-venv \
+ && apt clean \
  && echo done
 
 # copy repo
@@ -38,32 +60,148 @@ RUN set -ex \
  && cpack -G DEB \
  && cp isce*.deb /tmp/
 
-FROM ubuntu:20.04
+# Build an isolated Python environment for fast-moving contrib tools so the
+# system Python stack used by ISCE/MintPy remains stable.
+RUN set -ex \
+ && python3 -m venv /opt/venvs/isce-extra \
+ && . /opt/venvs/isce-extra/bin/activate \
+ && python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+ && python -m pip install --no-cache-dir /opt/isce2/src/isce2/contrib/spurt \
+ && python -m pip install --no-cache-dir /opt/isce2/src/isce2/contrib/snaphu-py \
+ && python -m pip install --no-cache-dir \
+    numba \
+    opera-utils \
+    pydantic \
+    pyproj \
+    ruamel_yaml \
+    threadpoolctl \
+    tqdm \
+    tyro
+
+FROM ubuntu:22.04
 
 # Set an encoding to make things work smoothly.
-ENV LANG en_US.UTF-8
-ENV TZ US/Pacific
+ENV LANG=en_US.UTF-8
+ENV TZ=US/Pacific
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN set -ex \
  && apt-get update \
  && apt-get install -y \
+    aria2 \
+    curl \
+    csh \
+    gdal-bin \
+    gmt \
+    gmt-dcw \
+    gmt-gshhg-low \
     libfftw3-3 \
-    libgdal26 \
+    libgeos-dev \
+    libgdal30 \
     libhdf4-0 \
-    libhdf5-103 \
-    libopencv-core4.2 \
-    libopencv-highgui4.2 \
-    libopencv-imgproc4.2 \
+    libhdf5-103-1 \
+    libopencv-core4.5d \
+    libopencv-highgui4.5d \
+    libopencv-imgproc4.5d \
+    libproj-dev \
+    proj-bin \
+    proj-data \
+    libxm4 \
+    nano \
+    python3-argcomplete \
+    python3-cartopy \
+    python3-cvxopt \
+    python3-dask \
+    python3-distributed \
     python3-gdal \
     python3-h5py \
+    python3-joblib \
+    python3-lxml \
+    python3-matplotlib \
+    python3-pip \
     python3-numpy \
+    python3-pyproj \
+    python3-pyresample \
+    python3-requests \
+    python3-skimage \
+    python3-shapely \
     python3-scipy \
+    python3-mpi4py \
+    python3-tqdm \
+    python3-gdal \
+    python3-astropy \
+ && apt autoclean \
  && echo done
 
 # install ISCE from DEB
 COPY --from=builder /tmp/isce*.deb /tmp/isce2.deb
+COPY --from=builder /opt/venvs/isce-extra /opt/venvs/isce-extra
+COPY --from=builder /opt/isce2/src/isce2/MintPy /opt/MintPy
+COPY --from=builder /opt/isce2/src/isce2/contrib/stack /opt/isce2/contrib/stack
+COPY --from=builder /opt/isce2/src/isce2/contrib/timeseries /opt/isce2/contrib/timeseries
+COPY --from=builder /opt/isce2/src/isce2/contrib/snaphu-py /opt/isce2/contrib/snaphu-py
+COPY --from=builder /opt/isce2/src/isce2/contrib/spurt /opt/isce2/contrib/spurt
+COPY docker/isce2_raster_convert.py /usr/local/bin/isce2-raster-convert
 
 RUN dpkg -i /tmp/isce2.deb
+RUN ln -s /usr/lib/python3.10/dist-packages/isce2 /usr/lib/python3.10/dist-packages/isce || true
 
-RUN ln -s /usr/lib/python3.8/dist-packages/isce2 /usr/lib/python3.8/dist-packages/isce
+RUN set -ex \
+ && PYTHONPATH=/usr/lib/python3.10/dist-packages/isce2/components:/usr/lib/python3.10/dist-packages/isce2:/usr/lib/python3.10/dist-packages:${PYTHONPATH} python3 - <<'PY'
+import importlib
+import isce
+
+modules = [
+    'isceobj.InsarProc.runFilter',
+    'isceobj.StripmapProc.runFilter',
+    'isceobj.IsceProc.runFilter',
+    'isceobj.TopsProc.runFilter',
+]
+
+for name in modules:
+    module = importlib.import_module(name)
+    for symbol in ('_validated_alpha', '_validate_interferogram', '_validate_output'):
+        if not hasattr(module, symbol):
+            raise RuntimeError('{0} is missing {1}'.format(name, symbol))
+
+print('ISCE2 runFilter validation hooks verified in container.')
+PY
+
+RUN set -ex \
+ && python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+ && python3 -m pip install --no-cache-dir --no-deps \
+    dask-jobqueue \
+    pykml \
+    pysolid \
+    rich \
+    utm \
+ && python3 -m pip install --no-cache-dir pyaps3
+
+# Use MintPy source tree directly (Python path is configured below) to keep
+# compatibility with Python 3.8 and avoid pyproject build-time constraints.
+RUN set -ex \
+ && printf '%s\n' '#!/usr/bin/env bash' 'exec python3 -m mintpy "$@"' > /usr/local/bin/mintpy \
+ && chmod +x /usr/local/bin/mintpy
+
+RUN set -ex \
+ && printf '%s\n' '#!/usr/bin/env bash' 'exec /opt/venvs/isce-extra/bin/python "$@"' > /usr/local/bin/isce-extra-python \
+ && chmod +x /usr/local/bin/isce-extra-python
+
+RUN chmod +x /usr/local/bin/isce2-raster-convert
+
+ENV MINTPY_HOME=/opt/MintPy
+ENV ISCE_HOME=/usr/lib/python3.10/dist-packages/isce2
+ENV ISCE_CONTRIB=/opt/isce2/contrib
+ENV ISCE_STACK=$ISCE_CONTRIB/stack
+ENV ISCE_TIMESERIES=$ISCE_CONTRIB/timeseries
+ENV SNAPHU_PY_HOME=$ISCE_CONTRIB/snaphu-py
+ENV SPURT_HOME=$ISCE_CONTRIB/spurt
+ENV PATH=$PATH:$ISCE_HOME/applications:$ISCE_STACK/topsStack:$ISCE_STACK/stripmapStack:$ISCE_STACK/alosStack:$ISCE_TIMESERIES/prepStackToStaMPS/bin:$MINTPY_HOME/src/mintpy/cli:/opt/venvs/isce-extra/bin
+ENV PYTHONPATH=/usr/lib/python3.10/dist-packages:$ISCE_HOME/components:$ISCE_HOME:$ISCE_STACK:$MINTPY_HOME/src
+ENV ISCE_SNAPHU_NPROC=8
+ENV ISCE_SNAPHU_NTILEROW=2
+ENV ISCE_SNAPHU_NTILECOL=2
+ENV ISCE_SNAPHU_ROWOVRLP=240
+ENV ISCE_SNAPHU_COLOVRLP=240
+
+RUN ln -s /usr/lib/python3.10/dist-packages/isce2 /usr/lib/python3.10/dist-packages/isce

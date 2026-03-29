@@ -417,7 +417,7 @@ DEM_CROP_FILENAME = Component.Parameter('demCropFilename',
 
 FILTER_STRENGTH = Component.Parameter('filterStrength',
                                 public_name='filter Strength',
-                                default=0.7,
+                                default=0.6,
                                 type=float,
                                 mandatory=False,
                                 doc='')
@@ -530,6 +530,19 @@ class StripmapProc(Component, FrameMixin):
         #        y = getattr(self, getattr(x, 'attrname'))
         #        self.geocode_list[i] = y
         return
+
+    def hasGPU(self):
+        '''
+        Determine if stripmap GPU modules are available.
+        '''
+        flag = False
+        try:
+            from contrib.PyCuAmpcor import PyCuAmpcor  # noqa: F401
+            flag = True
+        except Exception:
+            pass
+
+        return flag
 
     def getReferenceFrame(self):
         return self._referenceFrame
@@ -726,4 +739,3 @@ def swapExtension(infile, inexts, outext):
         raise Exception('Did not find extension {0} in file name {1}'.format(str(inexts), infile))
 
     return outfile
-

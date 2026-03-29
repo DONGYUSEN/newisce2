@@ -306,18 +306,131 @@ class Lutan1(Sensor):
 
     def extractDoppler(self):
         '''
-        Set doppler values to zero since the metadata doppler values are unreliable.
-        Also, the SLC images are zero doppler.
+        Extract Doppler polynomial from annotation metadata and convert it to
+        Doppler-vs-pixel coefficients expected by ISCE processors.
         '''
-        dop = [0., 0., 0.]
+        if self._xml_root is None:
+            self.parse()
 
-        ####For insarApp
-        quadratic = {}
-        quadratic['a'] = dop[0] / self.frame.getInstrument().getPulseRepetitionFrequency()
-        quadratic['b'] = 0.
-        quadratic['c'] = 0.
+        from isceobj.Util import Poly1D
 
-        print("Average doppler: ", dop)
-        self.frame._dopplerVsPixel = dop
+        dc_root = self._xml_root.find('processing/doppler/dopplerCentroid')
+        if dc_root is None:
+            dc_root = self._xml_root.find('.//processing/doppler/dopplerCentroid')
+        if dc_root is None:
+            raise Exception('Could not find processing/doppler/dopplerCentroid in Lutan1 metadata.')
+
+        estimates = dc_root.findall('dopplerEstimate')
+        if len(estimates) == 0:
+            single = dc_root.find('dopplerEstimate')
+            if single is not None:
+                estimates = [single]
+
+        if len(estimates) == 0:
+            raise Exception('Could not find dopplerEstimate records in Lutan1 metadata.')
+
+        tdiff = 1.0e99
+        dpoly = None
+        selected_coeffs = None
+
+        for est in estimates:
+            # Prefer combinedDoppler, fallback to baseband/geometric when needed.
+            dop_node = est.find('combinedDoppler')
+            if dop_node is None:
+                dop_node = est.find('basebandDoppler')
+            if dop_node is None:
+                dop_node = est.find('geometricDoppler')
+            if dop_node is None:
+                continue
+
+            coeff_nodes = dop_node.findall('coefficient')
+            if len(coeff_nodes) > 0:
+                max_exp = -1
+                parsed = {}
+                for cnode in coeff_nodes:
+                    try:
+                        exp = int(cnode.attrib.get('exponent', '0'))
+                        val = float(cnode.text)
+                    except Exception:
+                        continue
+                    parsed[exp] = val
+                    if exp > max_exp:
+                        max_exp = exp
+                if max_exp < 0:
+                    continue
+                coeffs = [0.0] * (max_exp + 1)
+                for exp, val in parsed.items():
+                    coeffs[exp] = val
+            else:
+                coeff_text = dop_node.findtext('dataDcPolynomial')
+                if coeff_text is None:
+                    coeff_text = dop_node.findtext('geometryDcPolynomial')
+                if coeff_text is None:
+                    continue
+                try:
+                    coeffs = [float(val) for val in coeff_text.split()]
+                except Exception:
+                    continue
+
+            if len(coeffs) == 0:
+                continue
+
+            ref_text = dop_node.findtext('referencePoint')
+            if ref_text is None:
+                continue
+
+            try:
+                tref = float(ref_text)  # two-way range time in seconds
+            except Exception:
+                continue
+
+            etime = est.findtext('timeUTC')
+            if etime is None:
+                delta = 0.0
+            else:
+                try:
+                    delta = abs((self.convertToDateTime(etime.strip()) - self.frame.sensingMid).total_seconds())
+                except Exception:
+                    delta = 0.0
+
+            if delta >= tdiff:
+                continue
+
+            rref = 0.5 * Const.c * tref
+            poly = Poly1D.Poly1D()
+            poly.initPoly(order=len(coeffs) - 1)
+            poly.setMean(rref)
+            poly.setNorm(0.5 * Const.c)
+            poly.setCoeffs(coeffs)
+
+            dpoly = poly
+            selected_coeffs = list(coeffs)
+            tdiff = delta
+
+        if dpoly is None:
+            raise Exception('Could not extract valid Doppler polynomial from Lutan1 metadata.')
+
+        prf = self.frame.getInstrument().getPulseRepetitionFrequency()
+        rmid = (
+            self.frame.startingRange
+            + 0.5 * self.frame.getNumberOfSamples() * self.frame.getInstrument().getRangePixelSize()
+        )
+
+        quadratic = {
+            'a': dpoly(rmid) / prf if prf else 0.0,
+            'b': 0.0,
+            'c': 0.0,
+        }
+
+        npix = max(dpoly._order + 2, 4)
+        pix = np.linspace(0, self.frame.getNumberOfSamples() - 1, num=npix)
+        rngs = self.frame.startingRange + pix * self.frame.getInstrument().getRangePixelSize()
+        evals = dpoly(rngs)
+        fit = np.polyfit(pix, evals, dpoly._order)
+
+        self.frame._dopplerVsPixel = list(fit[::-1])
+        self.doppler_coeff = list(selected_coeffs) if selected_coeffs is not None else None
+        print("Average doppler quadratic(a, b, c): ", quadratic['a'], quadratic['b'], quadratic['c'])
+        print("Doppler Fit : ", self.frame._dopplerVsPixel)
 
         return quadratic

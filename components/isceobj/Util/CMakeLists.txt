@@ -17,9 +17,9 @@ target_link_libraries(utilLib PRIVATE
     )
 
 isce2_add_staticlib(combinedLib
-    Library/geometry/src/geometryModule.F
     Library/linalg3/src/linalg3Module.F
     Library/linalg3/src/linalg3.c
+    Library/geometry/src/geometryModule.F
     Library/orbit/src/orbit.c
     Library/orbit/src/orbitModule.F
     Library/orbit/src/orbitHermite.c

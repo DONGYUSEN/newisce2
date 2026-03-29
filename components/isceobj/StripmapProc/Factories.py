@@ -52,7 +52,7 @@ def isRawSensor(sensor):
     '''
     Check if input data is raw / slc.
     '''
-    if str(sensor).lower() in ["terrasarx","cosmo_skymed_slc","radarsat2",'tandemx', 'kompsat5','risat1_slc','sentinel1', 'alos2','ers_slc','alos_slc','envisat_slc', 'uavsar_rpi','ers_envisat_slc','sicd_rgzero', 'iceye_slc', 'uavsar_hdf5_slc', 'saocom_slc', 'lutan1']:
+    if str(sensor).lower() in ["terrasarx","cosmo_skymed_slc","radarsat2",'tandemx', 'kompsat5','risat1_slc','sentinel1', 'alos2','ers_slc','alos_slc','envisat_slc', 'uavsar_rpi','ers_envisat_slc','sicd_rgzero', 'iceye_slc', 'uavsar_hdf5_slc', 'saocom_slc', 'lutan1', 'tianyi']:
         return False
     else:
         return True
@@ -63,9 +63,9 @@ def isZeroDopplerSLC(sensor):
     Check if SLC is zero doppler / native doppler.
     '''
 
-    if str(sensor).lower() in ["terrasarx","cosmo_skymed_slc","radarsat2",'tandemx', 'kompsat5','risat1_slc','sentinel1', 'alos2','ers_slc','envisat_slc','ers_envisat_slc','sicd_rgzero', 'iceye_slc', 'uavsar_hdf5_slc', 'saocom_slc', 'lutan1']:
+    if str(sensor).lower() in ["terrasarx","cosmo_skymed_slc","radarsat2",'tandemx', 'kompsat5','risat1_slc','sentinel1', 'alos2','ers_slc','envisat_slc','ers_envisat_slc','sicd_rgzero', 'iceye_slc', 'uavsar_hdf5_slc', 'saocom_slc']:
         return True
-    elif sensor.lower() in ['alos_slc', 'uavsar_rpi']:
+    elif sensor.lower() in ['alos_slc', 'uavsar_rpi', 'tianyi', 'lutan1']:
         return False
     else:
         raise Exception('Unknown sensor type {0} encountered in isZeroDopplerSLC'.format(sensor))
@@ -76,7 +76,7 @@ def getDopplerMethod(sensor):
     Return appropriate doppler method based on user input.
     '''
 
-    if str(sensor).lower() in ["terrasarx","cosmo_skymed_slc","radarsat2",'tandemx', 'kompsat5','risat1_slc','sentinel1', 'alos2','ers_slc','alos_slc','envisat_slc', 'uavsar_rpi','cosmo_skymed','ers_envisat_slc','sicd_rgzero', 'iceye_slc', 'uavsar_hdf5_slc', 'saocom_slc', 'roi_pac','lutan1']:
+    if str(sensor).lower() in ["terrasarx","cosmo_skymed_slc","radarsat2",'tandemx', 'kompsat5','risat1_slc','sentinel1', 'alos2','ers_slc','alos_slc','envisat_slc', 'uavsar_rpi','cosmo_skymed','ers_envisat_slc','sicd_rgzero', 'iceye_slc', 'uavsar_hdf5_slc', 'saocom_slc', 'roi_pac','lutan1', 'tianyi']:
         res =  'useDEFAULT'
     else:
         res =  'useDOPIQ'

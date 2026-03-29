@@ -235,6 +235,15 @@ FILTER_STRENGTH = Application.Parameter('filterStrength',
                                       mandatory=False,
                                       doc='')
 
+USE_GPU = Application.Parameter(
+    'useGPU',
+    public_name='use GPU',
+    default=True,
+    type=bool,
+    mandatory=False,
+    doc='Prefer GPU-enabled processing where stripmap pipeline supports it.'
+)
+
 ############################################## Modified by V.Brancato 10.07.2019
 DO_RUBBERSHEETINGAZIMUTH = Application.Parameter('doRubbersheetingAzimuth', 
                                       public_name='do rubbersheetingAzimuth',
@@ -270,16 +279,61 @@ DO_DENSEOFFSETS  = Application.Parameter('doDenseOffsets',
                                       mandatory=False,
                                       doc='')
 
+REFINE_TIMING_AZIMUTH_AZIMUTH_ORDER = Application.Parameter(
+    'refineTimingAzimuthAzimuthOrder',
+    public_name='refine timing azimuth-azimuth order',
+    default=2,
+    type=int,
+    mandatory=False,
+    doc='Fallback refine-secondary-timing polynomial azimuth order for azimuth offsets.'
+)
+
+REFINE_TIMING_AZIMUTH_RANGE_ORDER = Application.Parameter(
+    'refineTimingAzimuthRangeOrder',
+    public_name='refine timing azimuth-range order',
+    default=2,
+    type=int,
+    mandatory=False,
+    doc='Fallback refine-secondary-timing polynomial range order for azimuth offsets.'
+)
+
+REFINE_TIMING_RANGE_AZIMUTH_ORDER = Application.Parameter(
+    'refineTimingRangeAzimuthOrder',
+    public_name='refine timing range-azimuth order',
+    default=2,
+    type=int,
+    mandatory=False,
+    doc='Fallback refine-secondary-timing polynomial azimuth order for range offsets.'
+)
+
+REFINE_TIMING_RANGE_RANGE_ORDER = Application.Parameter(
+    'refineTimingRangeRangeOrder',
+    public_name='refine timing range-range order',
+    default=2,
+    type=int,
+    mandatory=False,
+    doc='Fallback refine-secondary-timing polynomial range order for range offsets.'
+)
+
+REFINE_TIMING_SNR_THRESHOLD = Application.Parameter(
+    'refineTimingSnrThreshold',
+    public_name='refine timing SNR threshold',
+    default=5.0,
+    type=float,
+    mandatory=False,
+    doc='Fallback refine-secondary-timing SNR threshold used by offoutliers.'
+)
+
 DENSE_WINDOW_WIDTH = Application.Parameter('denseWindowWidth',
                                       public_name='dense window width',
-                                      default=64,
+                                      default=96,
                                       type = int,
                                       mandatory = False,
                                       doc = '')
 
 DENSE_WINDOW_HEIGHT = Application.Parameter('denseWindowHeight',
                                       public_name='dense window height',
-                                      default=64,
+                                      default=96,
                                       type = int,
                                       mandatory = False,
                                       doc = '')
@@ -287,14 +341,14 @@ DENSE_WINDOW_HEIGHT = Application.Parameter('denseWindowHeight',
 
 DENSE_SEARCH_WIDTH = Application.Parameter('denseSearchWidth',
                                       public_name='dense search width',
-                                      default=20,
+                                      default=48,
                                       type = int,
                                       mandatory = False,
                                       doc = '')
 
 DENSE_SEARCH_HEIGHT = Application.Parameter('denseSearchHeight',
                                       public_name='dense search height',
-                                      default=20,
+                                      default=48,
                                       type = int,
                                       mandatory = False,
                                       doc = '')
@@ -519,6 +573,7 @@ class _RoiBase(Application, FrameMixin):
                       REFERENCE_SENSOR_NAME,
                       SECONDARY_SENSOR_NAME,
                       FILTER_STRENGTH,
+                      USE_GPU,
                       CORRELATION_METHOD,
                       REFERENCE_DOPPLER_METHOD,
                       SECONDARY_DOPPLER_METHOD,
@@ -543,6 +598,11 @@ class _RoiBase(Application, FrameMixin):
                       RUBBERSHEET_SNR_THRESHOLD,
                       RUBBERSHEET_FILTER_SIZE,
                       DO_DENSEOFFSETS,
+                      REFINE_TIMING_AZIMUTH_AZIMUTH_ORDER,
+                      REFINE_TIMING_AZIMUTH_RANGE_ORDER,
+                      REFINE_TIMING_RANGE_AZIMUTH_ORDER,
+                      REFINE_TIMING_RANGE_RANGE_ORDER,
+                      REFINE_TIMING_SNR_THRESHOLD,
                       DENSE_WINDOW_WIDTH,
                       DENSE_WINDOW_HEIGHT,
                       DENSE_SEARCH_WIDTH,

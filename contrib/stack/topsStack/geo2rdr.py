@@ -26,8 +26,10 @@ def createParser():
             help='A text file that contains zimuth misregistration in subpixels')
     parser.add_argument('-r', '--range_misreg', type=str, dest='misreg_rng', default='',
             help='A text file that contains range misregistration in meters')
-    parser.add_argument('-useGPU', '--useGPU', dest='useGPU',action='store_true', default=False,
-            help='Allow App to use GPU when available')
+    parser.add_argument('-useGPU', '--useGPU', dest='useGPU', action='store_true', default=None,
+            help='Force enabling GPU when available (default: auto-detect)')
+    parser.add_argument('-noGPU', '--noGPU', dest='useGPU', action='store_false',
+            help='Force disabling GPU')
 
     # outputs
     parser.add_argument('-c', '--coregSLCdir', type=str, dest='coregdir', default='coreg_secondarys',
@@ -214,11 +216,15 @@ def main(iargs=None):
     except:
         pass
 
+    if inps.useGPU is None:
+        inps.useGPU = run_GPU
+
     if inps.useGPU and not run_GPU:
         print("GPU mode requested but no GPU ISCE code found")
 
     # setting the respective version of geo2rdr for CPU and GPU
-    if run_GPU and inps.useGPU:
+    use_gpu_runtime = run_GPU and inps.useGPU
+    if use_gpu_runtime:
         print('GPU mode')
         runGeo2rdr = runGeo2rdrGPU
     else:
@@ -280,7 +286,15 @@ def main(iargs=None):
                          'hgt': os.path.join(geomDir,'hgt_%02d_%02d.rdr'%(mBurst+1,mBurst+2)),
                          'rangeOffName': os.path.join(outdir, 'range_top_%02d_%02d.off'%(mBurst+1,mBurst+2)),
                          'azOffName': os.path.join(outdir, 'azimuth_top_%02d_%02d.off'%(mBurst+1,mBurst+2))}
-                runGeo2rdr(burstTop, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
+                try:
+                    runGeo2rdr(burstTop, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
+                except Exception as err:
+                    if not use_gpu_runtime:
+                        raise
+                    print('GPU geo2rdr failed, falling back to CPU geo2rdr: {}'.format(err))
+                    runGeo2rdr = runGeo2rdrCPU
+                    use_gpu_runtime = False
+                    runGeo2rdr(burstTop, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
 
                 print('Overlap pair {0}: Burst {1} of reference matched with Burst {2} of secondary'.format(mBurst-minBurst, mBurst+1, sBurst+1))
                 ####Generate offsets for bottom burst
@@ -289,7 +303,15 @@ def main(iargs=None):
                          'hgt': os.path.join(geomDir, 'hgt_%02d_%02d.rdr'%(mBurst+1,mBurst+2)),
                          'rangeOffName': os.path.join(outdir, 'range_bot_%02d_%02d.off'%(mBurst+1,mBurst+2)),
                          'azOffName': os.path.join(outdir, 'azimuth_bot_%02d_%02d.off'%(mBurst+1,mBurst+2))}
-                runGeo2rdr(burstBot, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
+                try:
+                    runGeo2rdr(burstBot, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
+                except Exception as err:
+                    if not use_gpu_runtime:
+                        raise
+                    print('GPU geo2rdr failed, falling back to CPU geo2rdr: {}'.format(err))
+                    runGeo2rdr = runGeo2rdrCPU
+                    use_gpu_runtime = False
+                    runGeo2rdr(burstBot, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
 
             else:
                 print('Burst {1} of reference matched with Burst {2} of secondary'.format(mBurst-minBurst, mBurst, sBurst))
@@ -299,7 +321,15 @@ def main(iargs=None):
                          'hgt': os.path.join(geomDir,'hgt_%02d.rdr'%(mBurst+1)),
                          'rangeOffName': os.path.join(outdir, 'range_%02d.off'%(mBurst+1)),
                          'azOffName': os.path.join(outdir, 'azimuth_%02d.off'%(mBurst+1))}
-                runGeo2rdr(burstTop, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
+                try:
+                    runGeo2rdr(burstTop, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
+                except Exception as err:
+                    if not use_gpu_runtime:
+                        raise
+                    print('GPU geo2rdr failed, falling back to CPU geo2rdr: {}'.format(err))
+                    runGeo2rdr = runGeo2rdrCPU
+                    use_gpu_runtime = False
+                    runGeo2rdr(burstTop, rdict, misreg_az=misreg_az, misreg_rg=misreg_rg)
 
 
 

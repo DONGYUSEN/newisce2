@@ -13,6 +13,7 @@ InstallSameDir(
     runInterferogram.py
     runPreprocessor.py
     runRefineSecondaryTiming.py
+    externalRegistration.py
     runResampleSlc.py
     runResampleSubbandSlc.py
     runROI.py

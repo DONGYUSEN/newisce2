@@ -161,21 +161,36 @@ def mask_filter(denseOffsetFile, snrFile, band, snrThreshold, filterSize, outNam
     return None
 
 def fill_with_smoothed(off,filterSize):
-
-    from astropy.convolution import convolve
+    from scipy import ndimage
+    try:
+        from astropy.convolution import convolve
+        use_astropy = True
+    except Exception:
+        convolve = None
+        use_astropy = False
+        print('astropy not found, falling back to scipy-based smoothing for offset filling.')
 
     off_2filt=np.copy(off)
     kernel = np.ones((filterSize,filterSize),np.float32)/(filterSize*filterSize)
     loop = 0
     cnt2=1
 
-    while (cnt2!=0 & loop<100):
+    while (cnt2 != 0) and (loop < 100):
        loop += 1
        idx2= np.isnan(off_2filt)
        cnt2 = np.sum(np.count_nonzero(np.isnan(off_2filt)))
        print(cnt2)
        if cnt2 != 0:
-          off_filt= convolve(off_2filt,kernel,boundary='extend',nan_treatment='interpolate')
+          if use_astropy:
+              off_filt= convolve(off_2filt,kernel,boundary='extend',nan_treatment='interpolate')
+          else:
+              valid = np.isfinite(off_2filt)
+              data0 = np.where(valid, off_2filt, 0.0)
+              smooth_data = ndimage.uniform_filter(data0, size=filterSize, mode='nearest')
+              smooth_wgt = ndimage.uniform_filter(valid.astype(np.float32), size=filterSize, mode='nearest')
+              off_filt = np.full_like(off_2filt, np.nan)
+              nz = smooth_wgt > 0
+              off_filt[nz] = smooth_data[nz] / smooth_wgt[nz]
           off_2filt[idx2]=off_filt[idx2]
           idx3 = np.where(off_filt == 0)
           off_2filt[idx3]=np.nan
@@ -249,6 +264,10 @@ def runRubbersheetAzimuth(self):
 
     if not self.doRubbersheetingAzimuth:
         print('Rubber sheeting in azimuth not requested ... skipping')
+        return
+
+    if not self.doDenseOffsets:
+        print('Rubber sheeting in azimuth requested but doDenseOffsets is False ... skipping')
         return
 
     # denseOffset file name computeed from cross-correlation

@@ -14,6 +14,7 @@
 
         module geometryModule
             use, intrinsic :: iso_c_binding
+            use linalg3module
             implicit none
 
             type, bind(C) :: pegType

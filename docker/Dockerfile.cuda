@@ -1,116 +1,284 @@
-FROM hysds/cuda-dev:latest
+ARG CUDA_TAG=12.4.1
+ARG CUDA_IMAGE=nvidia/cuda
 
-# Set an encoding to make things work smoothly.
-ENV LANG en_US.UTF-8
+FROM ${CUDA_IMAGE}:${CUDA_TAG}-devel-ubuntu22.04 AS builder
 
-# Set ISCE repo
-ENV ISCE_ORG isce-framework
+ENV LANG=en_US.UTF-8
+ENV TZ=Asia/Shanghai
+ARG DEBIAN_FRONTEND=noninteractive
 
-# set to root user
-USER root
+# Optional mirror for mainland China: set --build-arg USE_CN_MIRROR=true
+ARG USE_CN_MIRROR=false
+ARG BUILD_JOBS=8
+# Set to your GPU architecture list, e.g. "61;86;89".
+# For CMake <= 3.22, special values like "all-major" may not be handled
+# correctly and can lead to an empty arch flag ("compute_").
+ARG CUDA_ARCHS=all-major
+# Optional install controls
+ARG INSTALL_EXTRA_CONTRIB=true
+ARG EXTRA_APT_PACKAGES=""
+ARG EXTRA_PIP_PACKAGES=""
 
-# install tools for RPM generation
+RUN if [ "${USE_CN_MIRROR}" = "true" ]; then \
+      sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+      sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    fi
+
 RUN set -ex \
- && yum update -y \
- && yum groupinstall -y "development tools" \
- && yum install -y \
-      make ruby-devel rpm-build rubygems \
- && gem install ffi -v 1.12.2 \
- && gem install --no-ri --no-rdoc fpm
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    cython3 \
+    gfortran \
+    git \
+    pkg-config \
+    snaphu \
+    libhdf5-dev \
+    libhdf4-alt-dev \
+    hdf5-tools \
+    hdf4-tools \
+    libopencv-dev \
+    libx11-dev \
+    libmotif-dev \
+    libfftw3-dev \
+    libgdal-dev \
+    libxm4 \
+    libproj-dev \
+    proj-bin \
+    proj-data \
+    python3-dev \
+    python3-gdal \
+    python3-h5py \
+    python3-numpy \
+    python3-opencv \
+    python3-pip \
+    python3-scipy \
+    python3-setuptools \
+    python3-venv \
+    python3-wheel \
+    pybind11-dev \
+ && if [ -n "${EXTRA_APT_PACKAGES}" ]; then apt-get install -y --no-install-recommends ${EXTRA_APT_PACKAGES}; fi \
+ && rm -rf /var/lib/apt/lists/*
 
-# install isce requirements
-RUN set -ex \
- && . /opt/conda/bin/activate root \
- && conda install --yes \
-      cython \
-      gdal \
-      gfortran \
-      git \
-      h5py \
-      libgdal \
-      pytest \
-      numpy \
-      fftw \
-      scipy \
-      scons \
-      hdf4 \
-      hdf5 \
-      libgcc \
-      libstdcxx-ng \
-      cmake \
- && yum install -y uuid-devel x11-devel motif-devel jq \
-    opencv opencv-devel opencv-python \
- && ln -sf /opt/conda/bin/cython /opt/conda/bin/cython3 \
- && mkdir -p /opt/isce2/src
-
-# override system libuuid into conda env to link in libXm and libXt
-RUN set -ex \
- && cd /opt/conda/lib \
- && unlink libuuid.so \
- && unlink libuuid.so.1 \
- && ln -s /lib64/libuuid.so.1.3.0 libuuid.so \
- && ln -s /lib64/libuuid.so.1.3.0 libuuid.so.1
-
-# install libgfortran.so.3 and create missing link
-RUN set -ex \
- && yum install -y gcc-gfortran \
- && cd /lib64 \
- && ( test -f libgfortran.so || ln -sv libgfortran.so.*.* libgfortran.so )
-
-# copy repo
 COPY . /opt/isce2/src/isce2
 
-# build ISCE
 RUN set -ex \
- && . /opt/conda/bin/activate root \
  && cd /opt/isce2/src/isce2 \
- && source docker/build_env.sh \
- && mkdir -p $BUILD_DIR \
- && cp docker/SConfigISCE.cuda configuration/SConfigISCE \
- && scons install \
- && cp docker/isce_env.sh $ISCE_INSTALL_ROOT \
- && cd /tmp \
- && mkdir -p /tmp/rpm-build/opt \
- && mv $ISCE_INSTALL_ROOT /tmp/rpm-build/opt \
- && curl -s https://api.github.com/repos/$ISCE_ORG/isce2/git/refs/heads/main \
-    > /tmp/rpm-build/opt/isce2/version.json \
- && hash=$(cat /tmp/rpm-build/opt/isce2/version.json | jq -r .object.sha) \
- && short_hash=$(echo $hash | cut -c1-5) \
- && fpm -s dir -t rpm -C /tmp/rpm-build --name isce \
-      --prefix=/ --version=2.3 --provides=isce \
-      --maintainer=piyush.agram@jpl.nasa.gov \
-      --description="InSAR Scientific Computing Environment v2 (${hash})"
+ && mkdir -p build \
+ && cd build \
+ && if [ "${CUDA_ARCHS}" = "all-major" ] || [ "${CUDA_ARCHS}" = "all" ] || [ "${CUDA_ARCHS}" = "native" ]; then \
+      CUDA_ARCHS_RESOLVED="61;75;80;86;89"; \
+    else \
+      CUDA_ARCHS_RESOLVED="${CUDA_ARCHS}"; \
+    fi \
+ && echo "Using CUDA architectures: ${CUDA_ARCHS_RESOLVED}" \
+ && cmake .. -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS_RESOLVED}" \
+      -DPYTHON_MODULE_DIR="$(python3 -c 'import site; print(site.getsitepackages()[-1])')" \
+      -DCMAKE_INSTALL_PREFIX=install \
+ && cmake --build . --parallel "${BUILD_JOBS}" \
+ && cpack -G DEB \
+ && cp isce*.deb /tmp/
 
-FROM hysds/cuda-pge-base:latest
-
-# Set an encoding to make things work smoothly.
-ENV LANG en_US.UTF-8
-
-# install ISCE from RPM
-COPY --from=0 /tmp/isce-2.3-1.x86_64.rpm /tmp/isce-2.3-1.x86_64.rpm
-
-# install isce and its minimal requirements
+# Optional extra venv for fast-moving contrib tools
 RUN set -ex \
- && sudo /opt/conda/bin/conda install --yes \
-      gdal \
-      h5py \
-      libgdal \
-      pytest \
-      numpy \
-      fftw \
-      scipy \
-      hdf4 \
-      hdf5 \
- && sudo yum update -y \
- && sudo yum install -y uuid-devel x11-devel motif-devel gcc-gfortran \
- && cd /opt/conda/lib \
- && sudo unlink libuuid.so \
- && sudo unlink libuuid.so.1 \
- && sudo ln -s /lib64/libuuid.so.1.3.0 libuuid.so \
- && sudo ln -s /lib64/libuuid.so.1.3.0 libuuid.so.1 \
- && cd /lib64 \
- && ( test -f libgfortran.so || sudo ln -sv libgfortran.so.*.* libgfortran.so ) \
- && sudo yum install -y /tmp/isce-2.3-1.x86_64.rpm \
- && sudo yum clean all \
- && sudo rm -rf /var/cache/yum \
- && sudo rm /tmp/isce-2.3-1.x86_64.rpm
+ && mkdir -p /opt/venvs/isce-extra \
+ && if [ "${INSTALL_EXTRA_CONTRIB}" = "true" ]; then \
+      python3 -m venv /opt/venvs/isce-extra && \
+      . /opt/venvs/isce-extra/bin/activate && \
+      python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
+      python -m pip install --no-cache-dir /opt/isce2/src/isce2/contrib/spurt && \
+      python -m pip install --no-cache-dir /opt/isce2/src/isce2/contrib/snaphu-py && \
+      python -m pip install --no-cache-dir \
+        numba \
+        opera-utils \
+        pydantic \
+        pyproj \
+        ruamel_yaml \
+        threadpoolctl \
+        tqdm \
+        tyro; \
+    fi \
+ && if [ -n "${EXTRA_PIP_PACKAGES}" ]; then \
+      . /opt/venvs/isce-extra/bin/activate && python -m pip install --no-cache-dir ${EXTRA_PIP_PACKAGES}; \
+    fi
+
+
+ARG CUDA_IMAGE=nvidia/cuda
+FROM ${CUDA_IMAGE}:${CUDA_TAG}-runtime-ubuntu22.04
+
+ENV LANG=en_US.UTF-8
+ENV TZ=US/Pacific
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Runtime optional installs
+ARG INSTALL_GMT=true
+ARG INSTALL_MPI=false
+ARG EXTRA_APT_PACKAGES=""
+ARG EXTRA_PIP_PACKAGES=""
+
+RUN set -ex \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+    curl \
+    csh \
+    gdal-bin \
+    libfftw3-3 \
+    libgeos-dev \
+    libgdal30 \
+    libhdf4-0-alt \
+    libhdf5-103-1 \
+    libopencv-core4.5d \
+    libopencv-highgui4.5d \
+    libopencv-imgproc4.5d \
+    libproj-dev \
+    proj-bin \
+    proj-data \
+    libxm4 \
+    python3 \
+    python3-argcomplete \
+    python3-cartopy \
+    python3-cvxopt \
+    python3-dask \
+    python3-distributed \
+    python3-gdal \
+    python3-h5py \
+    python3-joblib \
+    python3-lxml \
+    python3-matplotlib \
+    python3-numpy \
+    python3-pip \
+    python3-pyproj \
+    python3-pyresample \
+    python3-requests \
+    python3-scipy \
+    python3-skimage \
+    python3-shapely \
+    python3-tqdm \
+    python3-astropy \
+    snaphu \
+    nano \
+    aria2 \
+ && if [ "${INSTALL_GMT}" = "true" ]; then \
+      apt-get install -y --no-install-recommends gmt gmt-dcw gmt-gshhg-low; \
+    fi \
+ && if [ "${INSTALL_MPI}" = "true" ]; then \
+      apt-get install -y --no-install-recommends python3-mpi4py; \
+    fi \
+ && if [ -n "${EXTRA_APT_PACKAGES}" ]; then \
+      apt-get install -y --no-install-recommends ${EXTRA_APT_PACKAGES}; \
+    fi \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /tmp/isce*.deb /tmp/isce2.deb
+COPY --from=builder /opt/venvs/isce-extra /opt/venvs/isce-extra
+COPY --from=builder /opt/isce2/src/isce2/MintPy /opt/MintPy
+COPY --from=builder /opt/isce2/src/isce2/contrib/stack /opt/isce2/contrib/stack
+COPY --from=builder /opt/isce2/src/isce2/contrib/timeseries /opt/isce2/contrib/timeseries
+COPY --from=builder /opt/isce2/src/isce2/contrib/snaphu-py /opt/isce2/contrib/snaphu-py
+COPY --from=builder /opt/isce2/src/isce2/contrib/spurt /opt/isce2/contrib/spurt
+COPY docker/README.md /opt/isce2/docker/README.md
+COPY docker/isce2_raster_convert.py /usr/local/bin/isce2-raster-convert
+
+RUN set -ex \
+ && (dpkg -i /tmp/isce2.deb || (apt-get update && apt-get install -f -y && dpkg -i /tmp/isce2.deb)) \
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -f /tmp/isce2.deb \
+ && python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+ && python3 -m pip install --no-cache-dir --no-deps \
+    dask-jobqueue \
+    pykml \
+    pysolid \
+    rich \
+    utm \
+ && python3 -m pip install --no-cache-dir pyaps3 \
+ && if [ -n "${EXTRA_PIP_PACKAGES}" ]; then \
+      python3 -m pip install --no-cache-dir ${EXTRA_PIP_PACKAGES}; \
+    fi
+
+RUN set -ex \
+ && python3 - <<'PY'
+import importlib
+import sys
+from pathlib import Path
+
+candidates = set()
+for lib_root in (Path('/usr/lib'), Path('/usr/local/lib')):
+    for dist_pkgs in lib_root.glob('python*/dist-packages'):
+        candidates.add(str(dist_pkgs))
+        isce2_root = dist_pkgs / 'isce2'
+        if isce2_root.is_dir():
+            candidates.add(str(isce2_root))
+
+for path in sorted(candidates):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+try:
+    isce2_mod = importlib.import_module('isce2')
+except ModuleNotFoundError:
+    raise RuntimeError(
+        'Unable to import ISCE package bootstrap module (isce2). '
+        'Checked paths: {0}'.format(sorted(candidates))
+    )
+# Some modules still import from legacy "isce" package name.
+sys.modules.setdefault('isce', isce2_mod)
+
+modules = [
+    'isceobj.InsarProc.runFilter',
+    'isceobj.StripmapProc.runFilter',
+    'isceobj.IsceProc.runFilter',
+    'isceobj.TopsProc.runFilter',
+]
+
+for name in modules:
+    module = importlib.import_module(name)
+    for symbol in ('_validated_alpha', '_validate_interferogram', '_validate_output'):
+        if not hasattr(module, symbol):
+            raise RuntimeError('{0} is missing {1}'.format(name, symbol))
+
+print('ISCE2 runFilter validation hooks verified in CUDA container.')
+PY
+
+# MintPy entrypoint wrapper
+RUN set -ex \
+ && printf '%s\n' '#!/usr/bin/env bash' 'exec python3 -m mintpy "$@"' > /usr/local/bin/mintpy \
+ && chmod +x /usr/local/bin/mintpy
+
+# Optional extra venv wrapper
+RUN set -ex \
+ && printf '%s\n' '#!/usr/bin/env bash' 'exec /opt/venvs/isce-extra/bin/python "$@"' > /usr/local/bin/isce-extra-python \
+ && chmod +x /usr/local/bin/isce-extra-python \
+ && chmod +x /usr/local/bin/isce2-raster-convert
+
+ENV MINTPY_HOME=/opt/MintPy
+ENV ISCE_HOME=/usr/lib/python3/dist-packages/isce2
+ENV ISCE_CONTRIB=/opt/isce2/contrib
+ENV ISCE_STACK=$ISCE_CONTRIB/stack
+ENV ISCE_TIMESERIES=$ISCE_CONTRIB/timeseries
+ENV SNAPHU_PY_HOME=$ISCE_CONTRIB/snaphu-py
+ENV SPURT_HOME=$ISCE_CONTRIB/spurt
+ENV PATH=$PATH:$ISCE_HOME/applications:$ISCE_STACK/topsStack:$ISCE_STACK/stripmapStack:$ISCE_STACK/alosStack:$ISCE_TIMESERIES/prepStackToStaMPS/bin:$MINTPY_HOME/src/mintpy/cli:/opt/venvs/isce-extra/bin
+ENV PYTHONPATH=/usr/lib/python3/dist-packages:$ISCE_HOME:$ISCE_STACK:$MINTPY_HOME/src
+ENV ISCE_SNAPHU_NPROC=8
+ENV ISCE_SNAPHU_NTILEROW=2
+ENV ISCE_SNAPHU_NTILECOL=2
+ENV ISCE_SNAPHU_ROWOVRLP=240
+ENV ISCE_SNAPHU_COLOVRLP=240
+
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN set -ex \
+ && if [ -d /usr/lib/python3.10/dist-packages/isce2 ] && [ ! -e /usr/lib/python3/dist-packages/isce2 ]; then \
+      mkdir -p /usr/lib/python3/dist-packages && \
+      ln -sf /usr/lib/python3.10/dist-packages/isce2 /usr/lib/python3/dist-packages/isce2; \
+    fi \
+ && if [ -d /usr/lib/python3.10/dist-packages/isce2 ]; then \
+      ln -sf /usr/lib/python3.10/dist-packages/isce2 /usr/lib/python3.10/dist-packages/isce; \
+    elif [ -d /usr/lib/python3/dist-packages/isce2 ]; then \
+      ln -sf /usr/lib/python3/dist-packages/isce2 /usr/lib/python3/dist-packages/isce; \
+    fi

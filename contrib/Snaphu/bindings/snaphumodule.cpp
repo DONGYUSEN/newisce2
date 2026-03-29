@@ -230,6 +230,66 @@ PyObject *setAzimuthLooks_C(PyObject *self, PyObject *args)
     return Py_BuildValue("i",0);
 }
 
+PyObject *setNProc_C(PyObject *self, PyObject *args)
+{
+    long nproc;
+    if(!PyArg_ParseTuple(args, "l", &nproc))
+    {
+        return NULL;
+    }
+    params->nthreads = nproc;
+
+    return Py_BuildValue("i",0);
+}
+
+PyObject *setTileNRow_C(PyObject *self, PyObject *args)
+{
+    long ntilerow;
+    if(!PyArg_ParseTuple(args, "l", &ntilerow))
+    {
+        return NULL;
+    }
+    params->ntilerow = ntilerow;
+
+    return Py_BuildValue("i",0);
+}
+
+PyObject *setTileNCol_C(PyObject *self, PyObject *args)
+{
+    long ntilecol;
+    if(!PyArg_ParseTuple(args, "l", &ntilecol))
+    {
+        return NULL;
+    }
+    params->ntilecol = ntilecol;
+
+    return Py_BuildValue("i",0);
+}
+
+PyObject *setRowOverlap_C(PyObject *self, PyObject *args)
+{
+    long rowovrlp;
+    if(!PyArg_ParseTuple(args, "l", &rowovrlp))
+    {
+        return NULL;
+    }
+    params->rowovrlp = rowovrlp;
+
+    return Py_BuildValue("i",0);
+}
+
+PyObject *setColOverlap_C(PyObject *self, PyObject *args)
+{
+    long colovrlp;
+    if(!PyArg_ParseTuple(args, "l", &colovrlp))
+    {
+        return NULL;
+    }
+    params->colovrlp = colovrlp;
+
+    return Py_BuildValue("i",0);
+}
+
 
 PyObject *setDefoMaxCycles_C(PyObject *self, PyObject *args)
 {

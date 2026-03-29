@@ -23,9 +23,13 @@ def runDenseOffsets(self):
 
     hasGPU = self.useGPU and self._insar.hasGPU()
     if hasGPU:
-        runDenseOffsetsGPU(self)
-    else:
-        runDenseOffsetsCPU(self)
+        try:
+            runDenseOffsetsGPU(self)
+            return
+        except Exception as err:
+            logger.warning('GPU dense offsets failed, falling back to CPU DenseAmpcor: %s', err)
+
+    runDenseOffsetsCPU(self)
 
 
 
