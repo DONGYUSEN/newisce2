@@ -42,6 +42,14 @@ from iscesys.Component.Configurable import SELF
 from isceobj import RtcProc
 from isceobj.Util.decorators import use_api
 
+try:
+    from isce2.applications.postprocess_hook import run_auto_postprocess
+except ImportError:
+    try:
+        from applications.postprocess_hook import run_auto_postprocess
+    except ImportError:
+        from postprocess_hook import run_auto_postprocess
+
 logger = logging.getLogger('isce.grdsar')
 
 
@@ -377,6 +385,7 @@ class GRDSAR(Application):
         self._grd.timeStart = time.time()
 
     def endup(self):
+        run_auto_postprocess(logger, 'rtcApp')
         self.renderProcDoc()
         self._grd.timeEnd = time.time()
         logger.info("Total Time: %i seconds" %
@@ -426,13 +435,15 @@ class GRDSAR(Application):
         # Geocode
         self.step('geocode', func=self.runGeocode)
 
+        self.step('endup', func=self.endup)
+
         return None
 
     @use_api
     def main(self):
         self.help()
 
-        timeStart= time.time()
+        self._grd.timeStart = time.time()
 
         # Run a preprocessor for the two sets of frames
         self.runPreprocessor()
@@ -453,10 +464,7 @@ class GRDSAR(Application):
         # Geocode
         self.runGeocode()
 
-        timeEnd = time.time()
-        logger.info("Total Time: %i seconds" %(timeEnd - timeStart))
-
-        self.renderProcDoc()
+        self.endup()
 
         return None
 

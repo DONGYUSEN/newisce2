@@ -20,6 +20,14 @@ from iscesys.Compatibility import Compatibility
 from iscesys.Component.Configurable import SELF
 from isceobj import Alos2Proc
 
+try:
+    from isce2.applications.postprocess_hook import run_auto_postprocess
+except ImportError:
+    try:
+        from applications.postprocess_hook import run_auto_postprocess
+    except ImportError:
+        from postprocess_hook import run_auto_postprocess
+
 logging.config.fileConfig(
     os.path.join(os.environ['ISCE_HOME'], 'defaults', 'logging',
         'logging.conf')
@@ -815,6 +823,7 @@ class Alos2InSAR(Application):
         self._insar.timeStart = time.time()
 
     def endup(self):
+        run_auto_postprocess(logger, 'alos2App')
         self.renderProcDoc()
         self._insar.timeEnd = time.time()
         logger.info("Total Time: %i seconds" %
@@ -1048,6 +1057,7 @@ class Alos2InSAR(Application):
                 )
                   )
 
+        self.step('endup', func=self.endup)
 
         return None
 
@@ -1055,7 +1065,7 @@ class Alos2InSAR(Application):
     def main(self):
         self.help()
 
-        timeStart= time.time()
+        self._insar.timeStart = time.time()
 
         # Run a preprocessor for the two sets of frames
         self.runPreprocessor()
@@ -1117,11 +1127,7 @@ class Alos2InSAR(Application):
 
         self.runGeocodeOffset()
 
-
-        timeEnd = time.time()
-        logger.info("Total Time: %i seconds" %(timeEnd - timeStart))
-
-        self.renderProcDoc()
+        self.endup()
 
         return None
 

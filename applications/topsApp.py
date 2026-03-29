@@ -45,6 +45,14 @@ from iscesys.Compatibility import Compatibility
 from iscesys.Component.Configurable import SELF
 from isceobj import TopsProc
 
+try:
+    from isce2.applications.postprocess_hook import run_auto_postprocess
+except ImportError:
+    try:
+        from applications.postprocess_hook import run_auto_postprocess
+    except ImportError:
+        from postprocess_hook import run_auto_postprocess
+
 logger = logging.getLogger('isce.insar')
 
 
@@ -850,6 +858,7 @@ class TopsInSAR(Application):
         self._insar.timeStart = time.time()
 
     def endup(self):
+        run_auto_postprocess(logger, 'topsApp')
         self.renderProcDoc()
         self._insar.timeEnd = time.time()
         logger.info("Total Time: %i seconds" %
@@ -975,14 +984,14 @@ class TopsInSAR(Application):
         self.step('geocodeoffsets', func=self.runGeocode,
                 args=(self.off_geocode_list, False, self.geocode_bbox, True))
 
-#        self.step('endup', func=self.endup)
+        self.step('endup', func=self.endup)
         return None
 
     ## Main has the common start to both insarApp and dpmApp.
     def main(self):
         self.help()
 
-        timeStart= time.time()
+        self._insar.timeStart = time.time()
 
         # Run a preprocessor for the two sets of frames
         self.runPreprocessor()
@@ -1060,10 +1069,7 @@ class TopsInSAR(Application):
         #Geocode offsets
         self.runGeocode(self.off_geocode_list, False, self.geocode_bbox, True)
 
-        timeEnd = time.time()
-        logger.info("Total Time: %i seconds" %(timeEnd - timeStart))
-
-        self.renderProcDoc()
+        self.endup()
 
         return None
 

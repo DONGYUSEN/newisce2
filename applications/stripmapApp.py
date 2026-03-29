@@ -48,6 +48,14 @@ import isceobj.StripmapProc as StripmapProc
 from isceobj.Scene.Frame import FrameMixin
 from isceobj.Util.decorators import use_api
 
+try:
+    from isce2.applications.postprocess_hook import run_auto_postprocess
+except ImportError:
+    try:
+        from applications.postprocess_hook import run_auto_postprocess
+    except ImportError:
+        from postprocess_hook import run_auto_postprocess
+
 logger = logging.getLogger('isce.insar')
 
 
@@ -772,6 +780,7 @@ class _RoiBase(Application, FrameMixin):
         self._insar.timeStart = time.time()
 
     def endup(self):
+        run_auto_postprocess(logger, 'stripmapApp')
         self.renderProcDoc()
         self._insar.timeEnd = time.time()
         if hasattr(self._insar, 'timeStart'):
@@ -890,6 +899,7 @@ class _RoiBase(Application, FrameMixin):
     #@use_api
     def main(self):
         self.timeStart = time.time()
+        self._insar.timeStart = self.timeStart
         self.help()
 
         # Run a preprocessor for the two sets of frames
@@ -1045,10 +1055,7 @@ class Insar(_RoiBase):
         # Geocode
         #self.runGeocode(self.geocode_list, self.unwrap, self.geocode_bbox)
 
-        timeEnd = time.time()
-        logger.info("Total Time: %i seconds" %(timeEnd - self.timeStart))
-
-        self.renderProcDoc()
+        self.endup()
 
         return None
 

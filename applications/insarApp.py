@@ -45,6 +45,14 @@ from iscesys.Component.Configurable import SELF
 import isceobj.InsarProc as InsarProc
 from isceobj.Scene.Frame import FrameMixin
 
+try:
+    from isce2.applications.postprocess_hook import run_auto_postprocess
+except ImportError:
+    try:
+        from applications.postprocess_hook import run_auto_postprocess
+    except ImportError:
+        from postprocess_hook import run_auto_postprocess
+
 logger = logging.getLogger('isce.insar')
 
 
@@ -919,6 +927,7 @@ class _InsarBase(Application, FrameMixin):
         self._insar.timeStart = time.time()
 
     def endup(self):
+        run_auto_postprocess(logger, 'insarApp')
         self.renderProcDoc()
         self._insar.timeEnd = time.time()
         logger.info("Total Time: %i seconds" %
@@ -1136,14 +1145,13 @@ class Insar(_InsarBase):
         self.step('geocode', func=self.runGeocode,
                 args=(self.geocode_list, self.unwrap, self.geocode_bbox))
 
-#        self.step('endup', func=self.endup)
+        self.step('endup', func=self.endup)
 
         return None
 
     ## main() extends _InsarBase.main()
     def main(self):
-        import time
-        timeStart = time.time()
+        self._insar.timeStart = time.time()
 
         super().main()
 
@@ -1180,10 +1188,7 @@ class Insar(_InsarBase):
         # Geocode
         self.runGeocode(self.geocode_list, self.unwrap, self.geocode_bbox)
 
-        timeEnd = time.time()
-        logger.info("Total Time: %i seconds" %(timeEnd - timeStart))
-
-        self.renderProcDoc()
+        self.endup()
 
         return None
 

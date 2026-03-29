@@ -60,6 +60,14 @@ from isceobj.Sensor import SENSORS
 from contrib.demUtils.Correct_geoid_i2_srtm import Correct_geoid_i2_srtm
 from pprint import pprint
 
+try:
+    from isce2.applications.postprocess_hook import run_auto_postprocess
+except ImportError:
+    try:
+        from applications.postprocess_hook import run_auto_postprocess
+    except ImportError:
+        from postprocess_hook import run_auto_postprocess
+
 POLS = ['hh', 'hv', 'vh', 'vv'] ##accepted polarizations
 
 SENSOR_NAME = Application.Parameter(
@@ -1521,6 +1529,7 @@ class IsceApp(Application, FrameMixin):
 
 
     def endup(self):
+        run_auto_postprocess(logging.getLogger('isce.isceProc'), 'isceApp')
         self.renderProcDoc()
 
     ## Add instance attribute RunWrapper functions, which emulate methods.
@@ -1658,7 +1667,7 @@ class IsceApp(Application, FrameMixin):
             args=(self.geocode_list, self.do_unwrap, self.geocode_bbox),
             dostep=self.do_geocode)
 
-#        self.step('endup', func=self.endup, dostep=True)
+        self.step('endup', func=self.endup, dostep=True)
 
 
     def main(self):
