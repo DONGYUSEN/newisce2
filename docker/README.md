@@ -19,6 +19,48 @@
    docker build --rm --force-rm -t hysds/isce2:latest-cuda -f docker/Dockerfile.cuda .
    ```
 
+## Python package mirror in Docker image
+
+Both `docker/Dockerfile` and `docker/Dockerfile.cuda` now set:
+
+```bash
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+```
+
+This is useful in mainland China for faster and more stable `pip install`.
+
+If needed, override at runtime:
+
+```bash
+docker run --rm \
+  -e PIP_INDEX_URL=https://pypi.org/simple \
+  -e PIP_TRUSTED_HOST=pypi.org \
+  <image> <cmd>
+```
+
+## Automatic postprocess hook before `endup`
+
+Main ISCE2 apps (`topsApp`, `insarApp`, `stripmapApp`, `alos2App`,
+`alos2burstApp`, `rtcApp`, `isceApp`) run an auto postprocess command before
+`endup()`.
+
+Environment controls:
+
+```bash
+export ISCE_AUTO_POSTPROCESS=1
+export ISCE_AUTO_POSTPROCESS_STRICT=0
+export ISCE_AUTO_POSTPROCESS_CMD=isce2-tops-postprocess
+export ISCE_AUTO_POSTPROCESS_ARGS=""
+```
+
+Defaults:
+- `ISCE_AUTO_POSTPROCESS=1`
+- `ISCE_AUTO_POSTPROCESS_STRICT=0`
+- `ISCE_AUTO_POSTPROCESS_CMD=isce2-tops-postprocess`
+
+Set `ISCE_AUTO_POSTPROCESS=0` to disable.
+
 ## External Registration Quality-Fail Policy
 
 Stripmap `runRefineSecondaryTiming` now supports a non-fallback mode for

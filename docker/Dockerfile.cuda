@@ -6,6 +6,8 @@ FROM ${CUDA_IMAGE}:${CUDA_TAG}-devel-ubuntu22.04 AS builder
 ENV LANG=en_US.UTF-8
 ENV TZ=Asia/Shanghai
 ARG DEBIAN_FRONTEND=noninteractive
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 # Optional mirror for mainland China: set --build-arg USE_CN_MIRROR=true
 ARG USE_CN_MIRROR=false
@@ -113,6 +115,8 @@ FROM ${CUDA_IMAGE}:${CUDA_TAG}-runtime-ubuntu22.04
 ENV LANG=en_US.UTF-8
 ENV TZ=US/Pacific
 ARG DEBIAN_FRONTEND=noninteractive
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 # Runtime optional installs
 ARG INSTALL_GMT=true
