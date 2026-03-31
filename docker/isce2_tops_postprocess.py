@@ -51,6 +51,17 @@ def parse_args():
         help="LOS geometry file (geocoded) path relative to --proc-dir.",
     )
     parser.add_argument(
+        "--avg-amp",
+        default="merged/topophase.cor.geo",
+        help="Average-amplitude source path relative to --proc-dir (default: merged/topophase.cor.geo, band1).",
+    )
+    parser.add_argument(
+        "--avg-amp-band",
+        type=int,
+        default=1,
+        help="Band index (1-based) for --avg-amp source (default: 1).",
+    )
+    parser.add_argument(
         "--topsapp-xml",
         default="topsApp.xml",
         help="topsApp xml path (used for looks in multilook resolution mode).",
@@ -448,11 +459,47 @@ def wrapped_phase_to_u8(phase, valid_mask):
     return out
 
 
+def gamma_insar_phase_lut():
+    """Build a Gamma InSAR-like cyclic color LUT (index 0 reserved for nodata)."""
+    rgbs = np.zeros((256, 3), dtype=np.uint8)
+    for kk in range(85):
+        rgbs[kk, 0] = kk * 3
+        rgbs[kk, 1] = 255 - kk * 3
+        rgbs[kk, 2] = 255
+
+    rgbs[85:170, 0] = rgbs[0:85, 2]
+    rgbs[85:170, 1] = rgbs[0:85, 0]
+    rgbs[85:170, 2] = rgbs[0:85, 1]
+
+    rgbs[170:255, 0] = rgbs[0:85, 1]
+    rgbs[170:255, 1] = rgbs[0:85, 2]
+    rgbs[170:255, 2] = rgbs[0:85, 0]
+    rgbs[255, :] = np.array([0, 255, 255], dtype=np.uint8)
+
+    rgbs = np.roll(rgbs, int(256 / 2 - 214), axis=0)
+    rgbs = np.flipud(rgbs)
+
+    lut = np.zeros((256, 3), dtype=np.uint8)
+    lut[1:, :] = rgbs[:255, :]
+    return lut
+
+
+def colorize_u8_with_lut(view_u8, lut):
+    idx = np.asarray(view_u8, dtype=np.uint8)
+    return lut[idx]
+
+
 def write_tiff(path, arr, template_ds, dtype, nodata=None):
     arr = np.asarray(arr)
-    ny, nx = arr.shape
+    if arr.ndim == 2:
+        ny, nx = arr.shape
+        nb = 1
+    elif arr.ndim == 3 and arr.shape[2] >= 1:
+        ny, nx, nb = arr.shape
+    else:
+        raise RuntimeError("Unsupported array shape for GeoTIFF write: {0}".format(arr.shape))
     drv = gdal.GetDriverByName("GTiff")
-    ds = drv.Create(path, nx, ny, 1, dtype, options=["COMPRESS=LZW"])
+    ds = drv.Create(path, nx, ny, nb, dtype, options=["COMPRESS=LZW"])
     if ds is None:
         raise RuntimeError("Failed to create GeoTIFF: {0}".format(path))
     gt = template_ds.GetGeoTransform(can_return_null=True)
@@ -461,10 +508,14 @@ def write_tiff(path, arr, template_ds, dtype, nodata=None):
     proj = template_ds.GetProjection()
     if proj:
         ds.SetProjection(proj)
-    band = ds.GetRasterBand(1)
-    band.WriteArray(arr)
-    if nodata is not None:
-        band.SetNoDataValue(nodata)
+    if nb == 1:
+        band = ds.GetRasterBand(1)
+        band.WriteArray(arr)
+        if nodata is not None:
+            band.SetNoDataValue(nodata)
+    else:
+        for ib in range(nb):
+            ds.GetRasterBand(ib + 1).WriteArray(arr[:, :, ib])
     ds.FlushCache()
     ds = None
 
@@ -580,15 +631,53 @@ def main():
     if np.iscomplexobj(flat_arr):
         flat_valid &= (np.abs(flat_arr) > 0.0)
 
-    amp = np.asarray(unw_ds.GetRasterBand(1).ReadAsArray(), dtype=np.float32)
+    unw_amp = np.asarray(unw_ds.GetRasterBand(1).ReadAsArray(), dtype=np.float32)
     unw_phase = np.asarray(unw_ds.GetRasterBand(2).ReadAsArray(), dtype=np.float32)
     look_angle = np.asarray(los_ds.GetRasterBand(1).ReadAsArray(), dtype=np.float32)
-    if amp is None or unw_phase is None or look_angle is None:
+    if unw_amp is None or unw_phase is None or look_angle is None:
         raise RuntimeError("Failed reading one or more required product bands.")
 
-    amp_valid = np.isfinite(amp) & (amp > 0.0)
-    unw_valid = amp_valid & np.isfinite(unw_phase)
+    # Unwrapped/LOS validity still follows unw amplitude mask.
+    unw_amp_valid = np.isfinite(unw_amp) & (unw_amp > 0.0)
+    unw_valid = unw_amp_valid & np.isfinite(unw_phase)
     look_valid = np.isfinite(look_angle) & (look_angle > 0.0) & (look_angle < 90.0)
+
+    # Avg intensity source: prefer merged master/slave average amplitude product.
+    avg_amp = None
+    avg_amp_src = None
+    avg_amp_path = abs_path(proc_dir, args.avg_amp) if args.avg_amp else None
+    if avg_amp_path:
+        try:
+            avg_ds, avg_opened = open_ds(avg_amp_path)
+            if (avg_ds.RasterXSize == unw_ds.RasterXSize) and (avg_ds.RasterYSize == unw_ds.RasterYSize):
+                if avg_ds.RasterCount >= int(args.avg_amp_band):
+                    avg_amp = np.asarray(
+                        avg_ds.GetRasterBand(int(args.avg_amp_band)).ReadAsArray(),
+                        dtype=np.float32,
+                    )
+                    avg_amp_src = "{0} (band {1})".format(avg_opened, int(args.avg_amp_band))
+                else:
+                    print(
+                        "WARNING: avg-amp source has only {0} band(s), requested band {1}; fallback to unw amp band.".format(
+                            avg_ds.RasterCount, int(args.avg_amp_band)
+                        )
+                    )
+            else:
+                print(
+                    "WARNING: avg-amp source size mismatch ({0}x{1} vs {2}x{3}); fallback to unw amp band.".format(
+                        avg_ds.RasterXSize,
+                        avg_ds.RasterYSize,
+                        unw_ds.RasterXSize,
+                        unw_ds.RasterYSize,
+                    )
+                )
+        except Exception as err:
+            print("WARNING: failed to open avg-amp source ({0}); fallback to unw amp band.".format(err))
+
+    if avg_amp is None:
+        avg_amp = np.asarray(unw_amp, dtype=np.float32)
+        avg_amp_src = "unw band1 fallback"
+    print("INFO: avg intensity source={0}".format(avg_amp_src))
 
     # Detect wavelength and derive LOS displacement.
     wavelength = float(args.wavelength) if args.wavelength is not None else detect_wavelength(proc_dir)
@@ -597,9 +686,14 @@ def main():
     disp_valid = unw_valid & np.isfinite(los_disp)
     print("INFO: wavelength={0:.9f} m".format(wavelength))
 
-    # Intensity: log transform then 98% stretch to 1..255 (0 reserved for background).
-    log_intensity = np.full(amp.shape, np.nan, dtype=np.float32)
-    log_intensity[amp_valid] = np.log10(np.maximum(amp[amp_valid], 1e-8))
+    # Intensity: full-scene log transform (no mask), then stretch for display.
+    avg_amp_finite = np.isfinite(avg_amp)
+    amp_safe = np.where(avg_amp_finite, np.maximum(np.abs(avg_amp), 1e-8), 1e-8).astype(np.float32)
+    log_intensity = np.log10(amp_safe).astype(np.float32)
+    phase_lut = gamma_insar_phase_lut()
+
+    flat_view_u8 = wrapped_phase_to_u8(flat_phase, flat_valid)
+    unw_view_u8 = stretch_to_u8(unw_phase, unw_valid, percent=args.percent)[0]
 
     # Prepare products.
     products = [
@@ -608,7 +702,8 @@ def main():
             "raw": flat_phase.astype(np.float32),
             "raw_dtype": gdal.GDT_Float32,
             "raw_nodata": np.nan,
-            "view_u8": wrapped_phase_to_u8(flat_phase, flat_valid),
+            "view": colorize_u8_with_lut(flat_view_u8, phase_lut),
+            "view_dtype": gdal.GDT_Byte,
             "template": flat_ds,
         },
         {
@@ -616,15 +711,18 @@ def main():
             "raw": unw_phase.astype(np.float32),
             "raw_dtype": gdal.GDT_Float32,
             "raw_nodata": np.nan,
-            "view_u8": stretch_to_u8(unw_phase, unw_valid, percent=args.percent)[0],
+            "view": colorize_u8_with_lut(unw_view_u8, phase_lut),
+            "view_dtype": gdal.GDT_Byte,
             "template": unw_ds,
         },
         {
             "name": "avg_intensity_log",
             "raw": log_intensity.astype(np.float32),
             "raw_dtype": gdal.GDT_Float32,
-            "raw_nodata": np.nan,
-            "view_u8": stretch_to_u8(log_intensity, amp_valid, percent=args.percent)[0],
+            "raw_nodata": None,
+            "view": stretch_to_u8(log_intensity, np.ones(avg_amp.shape, dtype=bool), percent=args.percent)[0],
+            "view_dtype": gdal.GDT_Byte,
+            "view_nodata": None,
             "template": unw_ds,
         },
         {
@@ -632,7 +730,8 @@ def main():
             "raw": los_disp,
             "raw_dtype": gdal.GDT_Float32,
             "raw_nodata": np.nan,
-            "view_u8": stretch_to_u8(los_disp, disp_valid, percent=args.percent)[0],
+            "view": stretch_to_u8(los_disp, disp_valid, percent=args.percent)[0],
+            "view_dtype": gdal.GDT_Byte,
             "template": unw_ds,
         },
         {
@@ -640,7 +739,8 @@ def main():
             "raw": look_angle.astype(np.float32),
             "raw_dtype": gdal.GDT_Float32,
             "raw_nodata": np.nan,
-            "view_u8": stretch_to_u8(look_angle, look_valid, percent=args.percent)[0],
+            "view": stretch_to_u8(look_angle, look_valid, percent=args.percent)[0],
+            "view_dtype": gdal.GDT_Byte,
             "template": los_ds,
         },
     ]
@@ -652,7 +752,13 @@ def main():
         raw_tif = os.path.join(outdir, "{0}.tif".format(p["name"]))
         view_tif = os.path.join(outdir, "{0}.view.tif".format(p["name"]))
         write_tiff(raw_tif, p["raw"], p["template"], p["raw_dtype"], nodata=p["raw_nodata"])
-        write_tiff(view_tif, p["view_u8"], p["template"], gdal.GDT_Byte, nodata=0)
+        write_tiff(
+            view_tif,
+            p["view"],
+            p["template"],
+            p.get("view_dtype", gdal.GDT_Byte),
+            nodata=p.get("view_nodata", 0 if np.asarray(p["view"]).ndim == 2 else None),
+        )
         raw_tifs[p["name"]] = raw_tif
         view_tifs[p["name"]] = view_tif
 
