@@ -4,6 +4,8 @@
 import os
 import shlex
 import subprocess
+import sys
+import importlib.util
 
 
 _TRUE_VALUES = frozenset(("1", "true", "yes", "on", "y"))
@@ -24,11 +26,22 @@ def _env_bool(name, default):
 
 
 def _build_command():
-    command = os.environ.get("ISCE_AUTO_POSTPROCESS_CMD", "isce2-tops-postprocess")
+    command = os.environ.get("ISCE_AUTO_POSTPROCESS_CMD")
     args = os.environ.get("ISCE_AUTO_POSTPROCESS_ARGS", "")
-    command = command.strip()
     args = args.strip()
 
+    if command is None:
+        mod_name = "isce2.docker.isce2_tops_postprocess"
+        try:
+            has_module = importlib.util.find_spec(mod_name) is not None
+        except Exception:
+            has_module = False
+        parts = [sys.executable, "-m", mod_name] if has_module else ["isce2-tops-postprocess"]
+        if args:
+            parts.extend(shlex.split(args))
+        return parts
+
+    command = command.strip()
     if not command:
         return []
 

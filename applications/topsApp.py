@@ -861,8 +861,9 @@ class TopsInSAR(Application):
         run_auto_postprocess(logger, 'topsApp')
         self.renderProcDoc()
         self._insar.timeEnd = time.time()
-        logger.info("Total Time: %i seconds" %
-                    (self._insar.timeEnd-self._insar.timeStart))
+        if hasattr(self._insar, 'timeStart'):
+            logger.info("Total Time: %i seconds" %
+                        (self._insar.timeEnd-self._insar.timeStart))
         return None
 
 

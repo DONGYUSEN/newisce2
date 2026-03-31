@@ -11,6 +11,7 @@ This utility targets the standard topsApp outputs in a processing directory:
 import argparse
 import math
 import os
+import re
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -253,12 +254,79 @@ def parse_tops_looks(tops_xml):
     return range_looks, az_looks
 
 
-def detect_wavelength(proc_dir):
+def _parse_float_token(text):
+    if text is None:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
     try:
-        from iscesys.Component.ProductManager import ProductManager as PM
-    except Exception as err:
-        raise RuntimeError("Cannot import ISCE ProductManager to detect wavelength: {0}".format(err))
+        return float(s)
+    except Exception:
+        pass
+    m = re.search(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", s)
+    if m:
+        try:
+            return float(m.group(0))
+        except Exception:
+            return None
+    return None
 
+
+def _normalize_token(text):
+    return "".join(ch for ch in str(text).lower() if ch.isalnum())
+
+
+def _detect_wavelength_from_xml(iw_xml):
+    if (iw_xml is None) or (not os.path.isfile(iw_xml)):
+        return None
+
+    targets = ("radarwavelength", "radarwavelegth")
+    try:
+        root = ET.parse(iw_xml).getroot()
+    except Exception:
+        root = None
+
+    if root is not None:
+        for elem in root.iter():
+            keys = []
+            tag = elem.tag.split("}", 1)[-1] if isinstance(elem.tag, str) else ""
+            if tag:
+                keys.append(tag)
+            for attr in ("name", "key", "public_name", "id", "value"):
+                val = elem.get(attr)
+                if val:
+                    keys.append(val)
+
+            if not any(any(tok in _normalize_token(k) for tok in targets) for k in keys):
+                continue
+
+            candidates = [elem.text]
+            candidates.extend(child.text for child in list(elem))
+            for c in candidates:
+                val = _parse_float_token(c)
+                if (val is not None) and (0.001 < val < 1.0):
+                    return float(val)
+
+    try:
+        with open(iw_xml, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception:
+        return None
+
+    m = re.search(
+        r"radar[\W_]*wave(?:len|leg)th[^0-9+\-.eE]{0,128}([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)",
+        content,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        val = _parse_float_token(m.group(1))
+        if (val is not None) and (0.001 < val < 1.0):
+            return float(val)
+    return None
+
+
+def detect_wavelength(proc_dir):
     ifg_dir = os.path.join(proc_dir, "fine_interferogram")
     if not os.path.isdir(ifg_dir):
         raise RuntimeError("fine_interferogram directory not found for wavelength detection.")
@@ -271,12 +339,26 @@ def detect_wavelength(proc_dir):
     if not iw_xmls:
         raise RuntimeError("No IW*.xml found in fine_interferogram for wavelength detection.")
 
-    pm = PM()
-    pm.configure()
-    prod = pm.loadProduct(iw_xmls[0])
-    if (not hasattr(prod, "bursts")) or (len(prod.bursts) == 0):
-        raise RuntimeError("Failed to read bursts from {0}".format(iw_xmls[0]))
-    return float(prod.bursts[0].radarWavelength)
+    pm_err = None
+    try:
+        from iscesys.Component.ProductManager import ProductManager as PM
+
+        pm = PM()
+        pm.configure()
+        prod = pm.loadProduct(iw_xmls[0])
+        if hasattr(prod, "bursts") and (len(prod.bursts) > 0):
+            return float(prod.bursts[0].radarWavelength)
+        pm_err = "Loaded product has no bursts in {0}".format(iw_xmls[0])
+    except Exception as err:
+        pm_err = str(err)
+
+    xml_wvl = _detect_wavelength_from_xml(iw_xmls[0])
+    if xml_wvl is not None:
+        return float(xml_wvl)
+
+    raise RuntimeError(
+        "Cannot detect wavelength from {0}. ProductManager error: {1}".format(iw_xmls[0], pm_err)
+    )
 
 
 def estimate_incidence_from_los(los_ds):
