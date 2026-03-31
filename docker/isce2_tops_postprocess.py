@@ -9,6 +9,7 @@ This utility targets the standard topsApp outputs in a processing directory:
 """
 
 import argparse
+import glob
 import math
 import os
 import re
@@ -163,6 +164,63 @@ def open_ds(path):
     if ds is None:
         raise RuntimeError("Failed to open GDAL dataset: {0}".format(path))
     return ds, gpath
+
+
+def unique_items(seq):
+    out = []
+    seen = set()
+    for x in seq:
+        if x is None:
+            continue
+        k = str(x)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(x)
+    return out
+
+
+def input_candidates(workflow_name, kind):
+    w = str(workflow_name or "").strip().lower()
+    tops_first = w.startswith("tops")
+    stripmap_first = w.startswith("stripmap")
+
+    tops = {
+        "flat": ["merged/filt_topophase.flat.geo", "merged/topophase.flat.geo"],
+        "unw": ["merged/filt_topophase.unw.geo"],
+        "los": ["merged/los.rdr.geo"],
+        "avg_amp": ["merged/topophase.cor.geo", "merged/phsig.cor.geo"],
+    }
+    stripmap = {
+        "flat": ["interferogram/filt_topophase.flat.geo", "interferogram/topophase.flat.geo"],
+        "unw": ["interferogram/filt_topophase.unw.geo"],
+        "los": ["geometry/los.rdr.geo", "interferogram/los.rdr.geo"],
+        "avg_amp": ["interferogram/topophase.cor.geo", "interferogram/phsig.cor.geo"],
+    }
+
+    if tops_first:
+        merged = tops.get(kind, []) + stripmap.get(kind, [])
+    elif stripmap_first:
+        merged = stripmap.get(kind, []) + tops.get(kind, [])
+    else:
+        merged = tops.get(kind, []) + stripmap.get(kind, [])
+    return unique_items(merged)
+
+
+def open_preferred_ds(proc_dir, preferred_rel, workflow_name, kind):
+    tried = []
+    candidates = unique_items([preferred_rel] + input_candidates(workflow_name, kind))
+    for rel in candidates:
+        p = abs_path(proc_dir, rel)
+        try:
+            ds, opened = open_ds(p)
+            return ds, opened, rel
+        except Exception:
+            tried.append(p)
+            continue
+    raise RuntimeError(
+        "Failed to open {0} dataset. Tried: {1}".format(kind, ", ".join(tried[:12]))
+    )
 
 
 def get_center_lonlat(ds):
@@ -338,17 +396,26 @@ def _detect_wavelength_from_xml(iw_xml):
 
 
 def detect_wavelength(proc_dir):
-    ifg_dir = os.path.join(proc_dir, "fine_interferogram")
-    if not os.path.isdir(ifg_dir):
-        raise RuntimeError("fine_interferogram directory not found for wavelength detection.")
-
-    iw_xmls = []
+    cands = []
     for i in (1, 2, 3):
-        p = os.path.join(ifg_dir, "IW{0}.xml".format(i))
-        if os.path.isfile(p):
-            iw_xmls.append(p)
-    if not iw_xmls:
-        raise RuntimeError("No IW*.xml found in fine_interferogram for wavelength detection.")
+        cands.append(os.path.join(proc_dir, "fine_interferogram", "IW{0}.xml".format(i)))
+        cands.append(os.path.join(proc_dir, "reference", "IW{0}.xml".format(i)))
+    for p in (
+        "stripmapApp.xml",
+        "topsApp.xml",
+        "stripmapProc.xml",
+        "topsProc.xml",
+        "insarProc.xml",
+        "reference.xml",
+        "secondary.xml",
+    ):
+        cands.append(os.path.join(proc_dir, p))
+    cands.extend(sorted(glob.glob(os.path.join(proc_dir, "reference", "*.xml"))))
+    cands.extend(sorted(glob.glob(os.path.join(proc_dir, "fine_interferogram", "*.xml"))))
+    cands.extend(sorted(glob.glob(os.path.join(proc_dir, "interferogram", "*.xml"))))
+    xml_cands = [p for p in unique_items(cands) if os.path.isfile(p)]
+    if not xml_cands:
+        raise RuntimeError("No XML candidates found for wavelength detection.")
 
     pm_err = None
     try:
@@ -356,19 +423,44 @@ def detect_wavelength(proc_dir):
 
         pm = PM()
         pm.configure()
-        prod = pm.loadProduct(iw_xmls[0])
-        if hasattr(prod, "bursts") and (len(prod.bursts) > 0):
-            return float(prod.bursts[0].radarWavelength)
-        pm_err = "Loaded product has no bursts in {0}".format(iw_xmls[0])
+        for xmlp in xml_cands:
+            try:
+                prod = pm.loadProduct(xmlp)
+            except Exception:
+                continue
+
+            if hasattr(prod, "bursts") and (len(prod.bursts) > 0):
+                w = getattr(prod.bursts[0], "radarWavelength", None)
+                if w is not None:
+                    return float(w)
+
+            w = getattr(prod, "radarWavelength", None)
+            if w is not None:
+                return float(w)
+            inst = getattr(prod, "instrument", None)
+            if inst is not None:
+                w = getattr(inst, "radarWavelength", None)
+                if w is not None:
+                    return float(w)
+                getter = getattr(inst, "getRadarWavelength", None)
+                if callable(getter):
+                    try:
+                        return float(getter())
+                    except Exception:
+                        pass
+        pm_err = "No wavelength extracted from ProductManager candidates."
     except Exception as err:
         pm_err = str(err)
 
-    xml_wvl = _detect_wavelength_from_xml(iw_xmls[0])
-    if xml_wvl is not None:
-        return float(xml_wvl)
+    for xmlp in xml_cands:
+        xml_wvl = _detect_wavelength_from_xml(xmlp)
+        if xml_wvl is not None:
+            return float(xml_wvl)
 
     raise RuntimeError(
-        "Cannot detect wavelength from {0}. ProductManager error: {1}".format(iw_xmls[0], pm_err)
+        "Cannot detect wavelength from XML candidates ({0} files). ProductManager error: {1}".format(
+            len(xml_cands), pm_err
+        )
     )
 
 
@@ -593,22 +685,22 @@ def integerize_resolution(xres, yres, square=False):
 def main():
     args = parse_args()
     gdal.UseExceptions()
+    workflow_name = os.environ.get("ISCE_AUTO_POSTPROCESS_WORKFLOW", "")
 
     proc_dir = os.path.abspath(args.proc_dir)
     outdir = os.path.abspath(args.outdir)
     os.makedirs(outdir, exist_ok=True)
 
-    flat_path = abs_path(proc_dir, args.flat)
-    unw_path = abs_path(proc_dir, args.unw)
-    los_path = abs_path(proc_dir, args.los)
     tops_xml = abs_path(proc_dir, args.topsapp_xml)
 
-    flat_ds, flat_opened = open_ds(flat_path)
-    unw_ds, unw_opened = open_ds(unw_path)
-    los_ds, los_opened = open_ds(los_path)
+    flat_ds, flat_opened, flat_rel = open_preferred_ds(proc_dir, args.flat, workflow_name, "flat")
+    unw_ds, unw_opened, unw_rel = open_preferred_ds(proc_dir, args.unw, workflow_name, "unw")
+    los_ds, los_opened, los_rel = open_preferred_ds(proc_dir, args.los, workflow_name, "los")
     print("INFO: opened flat={0}".format(flat_opened))
     print("INFO: opened unw={0}".format(unw_opened))
     print("INFO: opened los={0}".format(los_opened))
+    if workflow_name:
+        print("INFO: workflow={0}, selected inputs: flat={1}, unw={2}, los={3}".format(workflow_name, flat_rel, unw_rel, los_rel))
 
     for name, ds in (("flat", flat_ds), ("unw", unw_ds), ("los", los_ds)):
         if ds.GetGeoTransform(can_return_null=True) is None:
@@ -644,38 +736,42 @@ def main():
 
     # Avg intensity source: prefer merged master/slave average amplitude product.
     avg_amp = None
+    avg_amp_nodata = None
     avg_amp_src = None
-    avg_amp_path = abs_path(proc_dir, args.avg_amp) if args.avg_amp else None
-    if avg_amp_path:
+    avg_try = unique_items([args.avg_amp] + input_candidates(workflow_name, "avg_amp"))
+    for rel in avg_try:
         try:
-            avg_ds, avg_opened = open_ds(avg_amp_path)
-            if (avg_ds.RasterXSize == unw_ds.RasterXSize) and (avg_ds.RasterYSize == unw_ds.RasterYSize):
-                if avg_ds.RasterCount >= int(args.avg_amp_band):
-                    avg_amp = np.asarray(
-                        avg_ds.GetRasterBand(int(args.avg_amp_band)).ReadAsArray(),
-                        dtype=np.float32,
-                    )
-                    avg_amp_src = "{0} (band {1})".format(avg_opened, int(args.avg_amp_band))
-                else:
-                    print(
-                        "WARNING: avg-amp source has only {0} band(s), requested band {1}; fallback to unw amp band.".format(
-                            avg_ds.RasterCount, int(args.avg_amp_band)
-                        )
-                    )
-            else:
-                print(
-                    "WARNING: avg-amp source size mismatch ({0}x{1} vs {2}x{3}); fallback to unw amp band.".format(
-                        avg_ds.RasterXSize,
-                        avg_ds.RasterYSize,
-                        unw_ds.RasterXSize,
-                        unw_ds.RasterYSize,
-                    )
+            avg_ds, avg_opened = open_ds(abs_path(proc_dir, rel))
+        except Exception:
+            continue
+
+        if (avg_ds.RasterXSize != unw_ds.RasterXSize) or (avg_ds.RasterYSize != unw_ds.RasterYSize):
+            print(
+                "WARNING: avg-amp source size mismatch ({0}x{1} vs {2}x{3}); trying next.".format(
+                    avg_ds.RasterXSize,
+                    avg_ds.RasterYSize,
+                    unw_ds.RasterXSize,
+                    unw_ds.RasterYSize,
                 )
-        except Exception as err:
-            print("WARNING: failed to open avg-amp source ({0}); fallback to unw amp band.".format(err))
+            )
+            continue
+        if avg_ds.RasterCount < int(args.avg_amp_band):
+            print(
+                "WARNING: avg-amp source has only {0} band(s), requested band {1}; trying next.".format(
+                    avg_ds.RasterCount, int(args.avg_amp_band)
+                )
+            )
+            continue
+
+        avg_band = avg_ds.GetRasterBand(int(args.avg_amp_band))
+        avg_amp = np.asarray(avg_band.ReadAsArray(), dtype=np.float32)
+        avg_amp_nodata = avg_band.GetNoDataValue()
+        avg_amp_src = "{0} (band {1})".format(avg_opened, int(args.avg_amp_band))
+        break
 
     if avg_amp is None:
         avg_amp = np.asarray(unw_amp, dtype=np.float32)
+        avg_amp_nodata = None
         avg_amp_src = "unw band1 fallback"
     print("INFO: avg intensity source={0}".format(avg_amp_src))
 
@@ -686,10 +782,18 @@ def main():
     disp_valid = unw_valid & np.isfinite(los_disp)
     print("INFO: wavelength={0:.9f} m".format(wavelength))
 
-    # Intensity: full-scene log transform (no mask), then stretch for display.
+    # Intensity: full-scene output, but exclude invalid border pixels from stretch statistics.
     avg_amp_finite = np.isfinite(avg_amp)
-    amp_safe = np.where(avg_amp_finite, np.maximum(np.abs(avg_amp), 1e-8), 1e-8).astype(np.float32)
+    avg_amp_valid = avg_amp_finite & (avg_amp > 0.0)
+    if (avg_amp_nodata is not None) and np.isfinite(avg_amp_nodata):
+        avg_amp_valid &= (np.abs(avg_amp - float(avg_amp_nodata)) > 1e-12)
+    if not np.any(avg_amp_valid):
+        avg_amp_valid = avg_amp_finite
+        print("WARNING: no positive valid pixels in avg-amp source; fallback to finite-only stretch statistics.")
+
+    amp_safe = np.where(avg_amp_valid, np.maximum(np.abs(avg_amp), 1e-8), 1e-8).astype(np.float32)
     log_intensity = np.log10(amp_safe).astype(np.float32)
+    print("INFO: avg intensity valid pixels for stretch: {0:.2f}%".format(100.0 * float(np.mean(avg_amp_valid))))
     phase_lut = gamma_insar_phase_lut()
 
     flat_view_u8 = wrapped_phase_to_u8(flat_phase, flat_valid)
@@ -720,7 +824,7 @@ def main():
             "raw": log_intensity.astype(np.float32),
             "raw_dtype": gdal.GDT_Float32,
             "raw_nodata": None,
-            "view": stretch_to_u8(log_intensity, np.ones(avg_amp.shape, dtype=bool), percent=args.percent)[0],
+            "view": stretch_to_u8(log_intensity, avg_amp_valid, percent=args.percent)[0],
             "view_dtype": gdal.GDT_Byte,
             "view_nodata": None,
             "template": unw_ds,

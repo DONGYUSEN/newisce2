@@ -87,8 +87,10 @@ def run_auto_postprocess(logger, workflow_name):
         workflow_name,
         " ".join(shlex.quote(token) for token in cmd),
     )
+    run_env = os.environ.copy()
+    run_env["ISCE_AUTO_POSTPROCESS_WORKFLOW"] = str(workflow_name)
     try:
-        result = subprocess.run(cmd, check=False)
+        result = subprocess.run(cmd, check=False, env=run_env)
     except OSError as err:
         message = "Failed to launch auto postprocess command: {0}".format(err)
         if strict:
