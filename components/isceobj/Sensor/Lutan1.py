@@ -136,6 +136,7 @@ class Lutan1(Sensor):
     parameter_list = (
         SAFE,
         TIFF,
+        XML,
         RANGE_CROP_FAR_PIXELS,
         ORBIT_FILE,
         ORBIT_FILTER,
@@ -241,6 +242,15 @@ class Lutan1(Sensor):
         raise Exception('safe path does not exist or is invalid: {}'.format(safe))
 
     def parse(self):
+        # Backward compatibility: ensure optional fields exist even if older
+        # class definitions/pickles omitted these parameters.
+        if not hasattr(self, 'xml'):
+            self.xml = None
+        if not hasattr(self, 'tiff'):
+            self.tiff = None
+        if not hasattr(self, 'safe'):
+            self.safe = None
+
         if (self.tiff is None or self.xml is None) and self.safe:
             self._resolve_inputs_from_safe()
 
