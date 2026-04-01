@@ -350,7 +350,7 @@ def _detect_wavelength_from_xml(iw_xml):
     if (iw_xml is None) or (not os.path.isfile(iw_xml)):
         return None
 
-    targets = ("radarwavelength", "radarwavelegth")
+    targets = ("radarwavelength", "radarwavelegth", "wavelength")
     try:
         root = ET.parse(iw_xml).getroot()
     except Exception:
@@ -413,49 +413,81 @@ def detect_wavelength(proc_dir):
     cands.extend(sorted(glob.glob(os.path.join(proc_dir, "reference", "*.xml"))))
     cands.extend(sorted(glob.glob(os.path.join(proc_dir, "fine_interferogram", "*.xml"))))
     cands.extend(sorted(glob.glob(os.path.join(proc_dir, "interferogram", "*.xml"))))
+    # stripmap products are often dumped in proc-dir root as *_raw.xml/*_slc.xml/*_crop.xml
+    cands.extend(sorted(glob.glob(os.path.join(proc_dir, "*.xml"))))
     xml_cands = [p for p in unique_items(cands) if os.path.isfile(p)]
-    if not xml_cands:
-        raise RuntimeError("No XML candidates found for wavelength detection.")
-
     pm_err = None
-    try:
-        from iscesys.Component.ProductManager import ProductManager as PM
+    if not xml_cands:
+        pm_err = "No XML candidates found for wavelength detection."
+    else:
+        try:
+            from iscesys.Component.ProductManager import ProductManager as PM
 
-        pm = PM()
-        pm.configure()
+            pm = PM()
+            pm.configure()
+            for xmlp in xml_cands:
+                try:
+                    prod = pm.loadProduct(xmlp)
+                except Exception:
+                    continue
+
+                if hasattr(prod, "bursts") and (len(prod.bursts) > 0):
+                    w = getattr(prod.bursts[0], "radarWavelength", None)
+                    if w is not None:
+                        return float(w)
+
+                w = getattr(prod, "radarWavelength", None)
+                if w is not None:
+                    return float(w)
+                inst = getattr(prod, "instrument", None)
+                if inst is not None:
+                    w = getattr(inst, "radarWavelength", None)
+                    if w is not None:
+                        return float(w)
+                    getter = getattr(inst, "getRadarWavelength", None)
+                    if callable(getter):
+                        try:
+                            return float(getter())
+                        except Exception:
+                            pass
+            pm_err = "No wavelength extracted from ProductManager candidates."
+        except Exception as err:
+            pm_err = str(err)
+
         for xmlp in xml_cands:
-            try:
-                prod = pm.loadProduct(xmlp)
-            except Exception:
+            xml_wvl = _detect_wavelength_from_xml(xmlp)
+            if xml_wvl is not None:
+                return float(xml_wvl)
+
+    # Final fallback: parse wavelength from ISCE log text if available.
+    log_cands = unique_items(
+        [
+            os.environ.get("ISCE_LOG_FILE"),
+            os.path.join(proc_dir, "isce.log"),
+            os.path.join(proc_dir, "log", "isce.log"),
+            os.path.join(proc_dir, "logs", "isce.log"),
+        ]
+    )
+    for logp in log_cands:
+        if not logp or (not os.path.isfile(logp)):
+            continue
+        try:
+            with open(logp, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+        except Exception:
+            continue
+
+        for pat in (
+            r"(?:^|[\s,;])reference\.wavelength\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)",
+            r"(?:^|[\s,;])secondary\.wavelength\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)",
+            r"(?:^|[\s,;])wavelength\s*[:=]\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)",
+        ):
+            m = re.search(pat, text, flags=re.IGNORECASE | re.MULTILINE)
+            if not m:
                 continue
-
-            if hasattr(prod, "bursts") and (len(prod.bursts) > 0):
-                w = getattr(prod.bursts[0], "radarWavelength", None)
-                if w is not None:
-                    return float(w)
-
-            w = getattr(prod, "radarWavelength", None)
-            if w is not None:
-                return float(w)
-            inst = getattr(prod, "instrument", None)
-            if inst is not None:
-                w = getattr(inst, "radarWavelength", None)
-                if w is not None:
-                    return float(w)
-                getter = getattr(inst, "getRadarWavelength", None)
-                if callable(getter):
-                    try:
-                        return float(getter())
-                    except Exception:
-                        pass
-        pm_err = "No wavelength extracted from ProductManager candidates."
-    except Exception as err:
-        pm_err = str(err)
-
-    for xmlp in xml_cands:
-        xml_wvl = _detect_wavelength_from_xml(xmlp)
-        if xml_wvl is not None:
-            return float(xml_wvl)
+            val = _parse_float_token(m.group(1))
+            if (val is not None) and (0.001 < val < 1.0):
+                return float(val)
 
     raise RuntimeError(
         "Cannot detect wavelength from XML candidates ({0} files). ProductManager error: {1}".format(

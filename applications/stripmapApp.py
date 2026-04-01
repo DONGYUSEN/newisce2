@@ -36,6 +36,7 @@
 from __future__ import print_function
 import time
 import sys
+import os
 from isce import logging
 
 import isce
@@ -57,6 +58,68 @@ except ImportError:
         from postprocess_hook import run_auto_postprocess
 
 logger = logging.getLogger('isce.insar')
+
+
+def _autodetect_wavelength_for_postprocess(insar_obj):
+    """Try to read radar wavelength from stripmap product XMLs."""
+    if insar_obj is None:
+        return None
+
+    product_attrs = (
+        "referenceSlcCropProduct",
+        "referenceSlcProduct",
+        "referenceRawProduct",
+        "secondarySlcCropProduct",
+        "secondarySlcProduct",
+        "secondaryRawProduct",
+    )
+    xml_candidates = []
+    for attr in product_attrs:
+        try:
+            xmlname = getattr(insar_obj, attr, None)
+        except Exception:
+            xmlname = None
+        if xmlname:
+            xml_candidates.append(xmlname)
+
+    seen = set()
+    for xmlname in xml_candidates:
+        if xmlname in seen:
+            continue
+        seen.add(xmlname)
+
+        try:
+            prod = insar_obj.loadProduct(xmlname)
+        except Exception:
+            continue
+
+        if prod is None:
+            continue
+
+        inst = None
+        try:
+            inst = prod.getInstrument() if hasattr(prod, "getInstrument") else getattr(prod, "instrument", None)
+        except Exception:
+            inst = None
+        if inst is None:
+            continue
+
+        wvl = None
+        try:
+            getter = getattr(inst, "getRadarWavelength", None)
+            if callable(getter):
+                wvl = getter()
+            else:
+                wvl = getattr(inst, "radarWavelength", None)
+            if wvl is not None:
+                wvl = float(wvl)
+        except Exception:
+            wvl = None
+
+        if (wvl is not None) and (0.001 < wvl < 1.0):
+            return wvl
+
+    return None
 
 
 SENSOR_NAME = Application.Parameter(
@@ -780,7 +843,28 @@ class _RoiBase(Application, FrameMixin):
         self._insar.timeStart = time.time()
 
     def endup(self):
-        run_auto_postprocess(logger, 'stripmapApp')
+        saved_post_args = os.environ.get("ISCE_AUTO_POSTPROCESS_ARGS")
+        injected_args = False
+        try:
+            auto_wvl = _autodetect_wavelength_for_postprocess(self._insar)
+            post_args = os.environ.get("ISCE_AUTO_POSTPROCESS_ARGS", "")
+            if (auto_wvl is not None) and ("--wavelength" not in post_args):
+                extra = "--wavelength {0:.12g}".format(auto_wvl)
+                merged = (post_args + " " + extra).strip() if post_args else extra
+                os.environ["ISCE_AUTO_POSTPROCESS_ARGS"] = merged
+                injected_args = True
+                logger.info(
+                    "Auto postprocess stripmap wavelength override enabled: %.12g m",
+                    auto_wvl,
+                )
+
+            run_auto_postprocess(logger, 'stripmapApp')
+        finally:
+            if injected_args:
+                if saved_post_args is None:
+                    os.environ.pop("ISCE_AUTO_POSTPROCESS_ARGS", None)
+                else:
+                    os.environ["ISCE_AUTO_POSTPROCESS_ARGS"] = saved_post_args
         self.renderProcDoc()
         self._insar.timeEnd = time.time()
         if hasattr(self._insar, 'timeStart'):
