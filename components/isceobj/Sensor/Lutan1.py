@@ -23,6 +23,11 @@ from isceobj.Orbit.OrbitExtender import OrbitExtender
 from osgeo import gdal
 import warnings
 
+try:
+    from scipy.interpolate import UnivariateSpline
+except Exception:
+    UnivariateSpline = None
+
 lookMap = { 'RIGHT' : -1,
             'LEFT' : 1}
 
@@ -48,6 +53,60 @@ ORBIT_FILE = Component.Parameter('orbitFile',
                             type=str,
                             doc = 'Orbit file')
 
+ORBIT_FILTER = Component.Parameter(
+    'orbitFilter',
+    public_name='orbit filter',
+    default=True,
+    type=bool,
+    mandatory=False,
+    doc='Enable robust smoothing filter for Lutan orbit state vectors.'
+)
+
+ORBIT_FILTER_DEGREE = Component.Parameter(
+    'orbitFilterDegree',
+    public_name='orbit filter degree',
+    default=5,
+    type=int,
+    mandatory=False,
+    doc='Spline/polynomial degree for orbit filtering.'
+)
+
+ORBIT_FILTER_SIGMA = Component.Parameter(
+    'orbitFilterSigma',
+    public_name='orbit filter sigma',
+    default=4.0,
+    type=float,
+    mandatory=False,
+    doc='Outlier rejection threshold in robust sigma units.'
+)
+
+ORBIT_FILTER_MAXITER = Component.Parameter(
+    'orbitFilterMaxIter',
+    public_name='orbit filter max iter',
+    default=3,
+    type=int,
+    mandatory=False,
+    doc='Maximum robust iterations for orbit filtering.'
+)
+
+ORBIT_FILTER_IGNORE_START = Component.Parameter(
+    'orbitFilterIgnoreStart',
+    public_name='orbit filter ignore start',
+    default=-1,
+    type=int,
+    mandatory=False,
+    doc='Number of state vectors at the beginning excluded from fit (-1: auto).'
+)
+
+ORBIT_FILTER_IGNORE_END = Component.Parameter(
+    'orbitFilterIgnoreEnd',
+    public_name='orbit filter ignore end',
+    default=-1,
+    type=int,
+    mandatory=False,
+    doc='Number of state vectors at the end excluded from fit (-1: auto).'
+)
+
 
 class Lutan1(Sensor):
 
@@ -56,7 +115,16 @@ class Lutan1(Sensor):
     family = 'l1sm'
     logging_name = 'isce.sensor.Lutan1'
 
-    parameter_list = (TIFF, ORBIT_FILE) + Sensor.parameter_list
+    parameter_list = (
+        TIFF,
+        ORBIT_FILE,
+        ORBIT_FILTER,
+        ORBIT_FILTER_DEGREE,
+        ORBIT_FILTER_SIGMA,
+        ORBIT_FILTER_MAXITER,
+        ORBIT_FILTER_IGNORE_START,
+        ORBIT_FILTER_IGNORE_END,
+    ) + Sensor.parameter_list
 
     def __init__(self, name = ''):
         super(Lutan1,self).__init__(self.__class__.family, name=name)
@@ -82,12 +150,19 @@ class Lutan1(Sensor):
                 orb = self.extractOrbit()
                 self.frame.orbit.setOrbitSource(os.path.basename(self.orbitFile))
             else:
-                pass
+                warnings.warn(
+                    "WARNING! orbitFile is set but not found. Falling back to annotation orbit."
+                )
+                orb = self.extractOrbitFromAnnotation()
+                self.frame.orbit.setOrbitSource('Annotation')
         else:
             warnings.warn("WARNING! No orbit file found. Orbit information from the annotation file is used for processing.")
             orb = self.extractOrbitFromAnnotation()
             self.frame.orbit.setOrbitSource(os.path.basename(self.xml))
             self.frame.orbit.setOrbitSource('Annotation')
+
+        if self.orbitFilter:
+            orb = self._filterOrbit(orb)
 
         for sv in orb:
             self.frame.orbit.addStateVector(sv)
@@ -95,6 +170,179 @@ class Lutan1(Sensor):
     def convertToDateTime(self,string):
         dt = datetime.datetime.strptime(string,"%Y-%m-%dT%H:%M:%S.%f")
         return dt
+
+    @staticmethod
+    def _robustScale(values):
+        vals = np.asarray(values, dtype=np.float64)
+        if vals.size == 0:
+            return 0.0
+        med = np.median(vals)
+        mad = np.median(np.abs(vals - med))
+        if mad > 0:
+            return 1.4826 * mad
+        std = np.std(vals)
+        return float(std) if np.isfinite(std) else 0.0
+
+    def _evaluateFit(self, t, y, mask, degree):
+        idx = np.where(mask)[0]
+        if idx.size < 3:
+            return y.copy(), 'none'
+
+        deg = max(1, min(int(degree), idx.size - 1, 5))
+        tx = t[idx]
+        yy = y[idx]
+
+        if UnivariateSpline is not None and tx.size >= deg + 2:
+            try:
+                txu, iu = np.unique(tx, return_index=True)
+                yyu = yy[iu]
+                if txu.size >= deg + 2:
+                    rough = np.diff(yyu)
+                    noise = self._robustScale(rough) * np.sqrt(2.0) if rough.size > 1 else self._robustScale(yyu)
+                    if not np.isfinite(noise) or noise <= 0:
+                        noise = self._robustScale(yyu - np.median(yyu))
+                    s_val = float(txu.size) * (noise ** 2) if (np.isfinite(noise) and noise > 0) else 0.0
+                    sp = UnivariateSpline(txu, yyu, k=deg, s=s_val)
+                    return sp(t), 'spline'
+            except Exception:
+                pass
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            coeff = np.polyfit(tx, yy, deg)
+        return np.polyval(coeff, t), 'poly'
+
+    def _robustFitComponent(self, t, y, baseMask):
+        mask = baseMask.copy()
+        fit = y.copy()
+        method_used = 'none'
+        sigma = max(1.0, float(self.orbitFilterSigma))
+        max_iter = max(1, int(self.orbitFilterMaxIter))
+        degree = max(1, int(self.orbitFilterDegree))
+
+        for _ in range(max_iter):
+            fit, method = self._evaluateFit(t, y, mask, degree)
+            method_used = method
+            resid = y - fit
+            scale = self._robustScale(resid[mask])
+            if (not np.isfinite(scale)) or (scale <= 0):
+                break
+            new_mask = baseMask & (np.abs(resid) <= sigma * scale)
+            if new_mask.sum() < max(3, degree + 1):
+                break
+            if np.array_equal(new_mask, mask):
+                break
+            mask = new_mask
+
+        fit, method = self._evaluateFit(t, y, mask, degree)
+        method_used = method
+        return fit, mask, method_used
+
+    def _resolveIgnoreCounts(self, nvec):
+        ig_start = int(self.orbitFilterIgnoreStart)
+        ig_end = int(self.orbitFilterIgnoreEnd)
+        degree = max(1, int(self.orbitFilterDegree))
+
+        if ig_start < 0:
+            ig_start = max(1, int(round(0.02 * nvec))) if nvec >= 20 else 1
+        if ig_end < 0:
+            ig_end = max(1, int(round(0.05 * nvec))) if nvec >= 20 else 1
+
+        ig_start = max(0, ig_start)
+        ig_end = max(0, ig_end)
+
+        min_keep = max(6, degree + 1)
+        max_drop = max(0, nvec - min_keep)
+        if (ig_start + ig_end) > max_drop:
+            if max_drop == 0:
+                ig_start, ig_end = 0, 0
+            else:
+                total = ig_start + ig_end
+                if total <= 0:
+                    ig_start, ig_end = 0, 0
+                else:
+                    ig_start = int(round(max_drop * (ig_start / float(total))))
+                    ig_end = max_drop - ig_start
+
+        return ig_start, ig_end
+
+    def _filterOrbit(self, orb):
+        vecs = list(orb)
+        nvec = len(vecs)
+        min_needed = max(8, int(self.orbitFilterDegree) + 2)
+        if nvec < min_needed:
+            warnings.warn(
+                'Lutan1 orbit filter skipped: only {} state vectors (need >= {}).'.format(nvec, min_needed)
+            )
+            return vecs
+
+        t0 = vecs[0].getTime()
+        t = np.array([(sv.getTime() - t0).total_seconds() for sv in vecs], dtype=np.float64)
+        pos = np.array([sv.getPosition() for sv in vecs], dtype=np.float64)
+        vel = np.array([sv.getVelocity() for sv in vecs], dtype=np.float64)
+
+        base_mask = np.ones(nvec, dtype=bool)
+        ig_start, ig_end = self._resolveIgnoreCounts(nvec)
+        if ig_start > 0:
+            base_mask[:min(ig_start, nvec)] = False
+        if ig_end > 0:
+            base_mask[max(0, nvec - ig_end):] = False
+
+        if base_mask.sum() < max(6, int(self.orbitFilterDegree) + 1):
+            warnings.warn(
+                'Lutan1 orbit filter skipped: usable vectors after ignore_start/end are insufficient.'
+            )
+            return vecs
+
+        pos_f = np.zeros_like(pos)
+        vel_f = np.zeros_like(vel)
+        pos_masks = []
+        vel_masks = []
+        methods = []
+
+        for comp in range(3):
+            fit, mask, method = self._robustFitComponent(t, pos[:, comp], base_mask)
+            pos_f[:, comp] = fit
+            pos_masks.append(mask)
+            methods.append('pos_{}={}'.format(comp, method))
+
+        for comp in range(3):
+            fit, mask, method = self._robustFitComponent(t, vel[:, comp], base_mask)
+            vel_f[:, comp] = fit
+            vel_masks.append(mask)
+            methods.append('vel_{}={}'.format(comp, method))
+
+        pos_ok = pos_masks[0] & pos_masks[1] & pos_masks[2]
+        vel_ok = vel_masks[0] & vel_masks[1] & vel_masks[2]
+        outliers = base_mask & (~pos_ok | ~vel_ok)
+        n_out = int(np.count_nonzero(outliers))
+        if n_out > 0:
+            warnings.warn(
+                'Lutan1 orbit filter detected {} outliers (ignore_start={}, ignore_end={}, degree={}).'.format(
+                    n_out, ig_start, ig_end, int(self.orbitFilterDegree)
+                )
+            )
+
+        if UnivariateSpline is None:
+            warnings.warn(
+                'SciPy unavailable: Lutan1 orbit filter used polynomial fallback instead of smoothing spline.'
+            )
+
+        print(
+            'Lutan1 orbit filter settings: degree={}, ignore_start={}, ignore_end={}'.format(
+                int(self.orbitFilterDegree), ig_start, ig_end
+            )
+        )
+        print('Lutan1 orbit filter methods:', ', '.join(methods))
+
+        out_vecs = []
+        for i, sv in enumerate(vecs):
+            new_sv = StateVector()
+            new_sv.setTime(sv.getTime())
+            new_sv.setPosition(pos_f[i, :].tolist())
+            new_sv.setVelocity(vel_f[i, :].tolist())
+            out_vecs.append(new_sv)
+        return out_vecs
 
 
     def grab_from_xml(self, path):
