@@ -37,6 +37,7 @@ from __future__ import print_function
 import time
 import sys
 import os
+import xml.etree.ElementTree as ET
 from isce import logging
 
 import isce
@@ -138,6 +139,68 @@ def _ensure_postprocess_utm_args(post_args):
     if current:
         return (current + " " + " ".join(extras)).strip()
     return " ".join(extras)
+
+
+def _safe_bool_value(value, default=None):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    sval = str(value).strip().lower()
+    if sval in ('1', 'true', 'yes', 'on', 'y', 't'):
+        return True
+    if sval in ('0', 'false', 'no', 'off', 'n', 'f', 'none', 'null', ''):
+        return False
+    return default
+
+
+def _find_input_xml_from_cmdline(cmdline):
+    if not cmdline:
+        return None
+
+    for token in cmdline:
+        if not isinstance(token, str):
+            continue
+        if token.startswith('-'):
+            continue
+        if token.lower().endswith('.xml') and os.path.isfile(token):
+            return token
+    return None
+
+
+def _read_root_xml_property(xml_path, property_name):
+    """
+    Read a top-level XML property directly under <stripmapApp>.
+    """
+    if (not xml_path) or (not os.path.isfile(xml_path)):
+        return None
+
+    norm = ''.join(str(property_name).split()).lower()
+    try:
+        root = ET.parse(xml_path).getroot()
+    except Exception:
+        return None
+
+    for node in root.findall('property'):
+        pname = node.get('name')
+        if pname is None:
+            name_node = node.find('name')
+            pname = (name_node.text if name_node is not None else None)
+        if pname is None:
+            continue
+        if ''.join(str(pname).split()).lower() != norm:
+            continue
+
+        value_node = node.find('value')
+        if (value_node is not None) and (value_node.text is not None):
+            return value_node.text.strip()
+        if node.text is not None:
+            return node.text.strip()
+        return None
+
+    return None
 
 
 SENSOR_NAME = Application.Parameter(
@@ -826,6 +889,20 @@ class _RoiBase(Application, FrameMixin):
 
             if g_count > 0:
                 self.off_geocode_list = self.insar.off_geocode_list
+
+        # Compatibility: honor legacy top-level <property name="useGPU">.
+        # Some XMLs place this switch at root instead of inside component "insar".
+        xml_path = _find_input_xml_from_cmdline(getattr(self, 'cmdline', None))
+        root_use_gpu = _read_root_xml_property(xml_path, 'useGPU')
+        if root_use_gpu is None:
+            root_use_gpu = _read_root_xml_property(xml_path, 'use GPU')
+        parsed_root_use_gpu = _safe_bool_value(root_use_gpu, default=None)
+        if parsed_root_use_gpu is not None:
+            self.useGPU = bool(parsed_root_use_gpu)
+            logger.info(
+                'Applying top-level XML useGPU=%s from %s',
+                str(self.useGPU), str(xml_path)
+            )
 
         # Compatibility: allow app-level rangeCropFarPixels in stripmapApp XML.
         if self.rangeCropFarPixels is not None:
