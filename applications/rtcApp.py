@@ -59,7 +59,7 @@ SENSOR_NAME = Application.Parameter(
     default='SENTINEL1',
     type=str,
     mandatory=True,
-    doc="Sensor name"
+    doc="Sensor name / 传感器名称"
                                     )
 
 USE_HIGH_RESOLUTION_DEM_ONLY = Application.Parameter(
@@ -71,7 +71,9 @@ USE_HIGH_RESOLUTION_DEM_ONLY = Application.Parameter(
     doc=(
     """If True and a dem is not specified in input, it will only
     download the SRTM highest resolution dem if it is available
-    and fill the missing portion with null values (typically -32767)."""
+    and fill the missing portion with null values (typically -32767).
+    若为 True 且未在输入中指定 DEM，仅下载可用的最高分辨率 SRTM，
+    缺失区域用空值（通常 -32767）填充。"""
     )
                                                 )
 DEM_FILENAME = Application.Parameter(
@@ -80,7 +82,7 @@ DEM_FILENAME = Application.Parameter(
      default='',
      type=str,
      mandatory=False,
-     doc="Filename of the Digital Elevation Model (DEM)"
+     doc="Filename of the Digital Elevation Model (DEM) / DEM 文件路径"
                                      )
 
 WATER_FILENAME = Application.Parameter(
@@ -89,7 +91,7 @@ WATER_FILENAME = Application.Parameter(
         default='',
         type=str,
         mandatory=False,
-        doc='Filename with SWBD data')
+        doc='Filename with SWBD data / SWBD 水体掩膜文件路径')
 
 APPLY_WATER_MASK = Application.Parameter(
         'applyWaterMask',
@@ -97,7 +99,7 @@ APPLY_WATER_MASK = Application.Parameter(
         default=False,
         type=bool,
         mandatory=False,
-        doc = 'Flag to apply water mask to images')
+        doc = 'Flag to apply water mask to images / 是否对影像应用水体掩膜')
 
 GEOCODE_BOX = Application.Parameter(
     'geocode_bbox',
@@ -105,7 +107,7 @@ GEOCODE_BOX = Application.Parameter(
     default = None,
     container=list,
     type=float,
-    doc='Bounding box for geocoding - South, North, West, East in degrees'
+    doc='Bounding box for geocoding - South, North, West, East in degrees / 地理编码范围：南北西东（度）'
                                     )
 
 EPSG = Application.Parameter(
@@ -113,21 +115,21 @@ EPSG = Application.Parameter(
     public_name='epsg id',
     default = '',
     type=str,
-    doc='epsg code for roi'
+    doc='epsg code for roi / 目标投影 EPSG 代码'
                                     )
 
 GSPACING = Application.Parameter('gspacing',
             public_name='geocode spacing',
             default = None,
             type = float,
-            doc = 'Desired grid spacing of geocoded product in meters. If not set, auto use ceil(max(multilook x/y resolution)) with square pixels.'
+            doc = 'Desired grid spacing of geocoded product in meters. If not set, auto use ceil(max(multilook x/y resolution)) with square pixels. / 地理编码输出分辨率（米）；未设置时自动使用多视分辨率最大值向上取整并强制方形像元。'
                                     ) 
 
 INTMETHOD = Application.Parameter('intmethod',
             public_name='geocode interpolation method',
             default = 'bilinear',
             type = str,
-            doc = 'Desired grid spacing of geocoded product in meters, in the specified UTM grid.'
+            doc = 'Desired grid spacing of geocoded product in meters, in the specified UTM grid. / 地理编码插值方法。'
                                     ) 
 
 PICKLE_DUMPER_DIR = Application.Parameter(
@@ -286,11 +288,11 @@ class GRDSAR(Application):
 
 
     def Usage(self):
-        print("Usages: ")
-        print("rtcApp.py <input-file.xml>")
-        print("rtcApp.py --steps")
-        print("rtcApp.py --help")
-        print("rtcApp.py --help --steps")
+        print("Usages / 用法: ")
+        print("rtcApp.py <input-file.xml>   # 使用配置文件运行")
+        print("rtcApp.py --steps            # 分步骤运行")
+        print("rtcApp.py --help             # 查看帮助")
+        print("rtcApp.py --help --steps     # 查看步骤帮助")
 
 
     def _init(self):
@@ -331,7 +333,7 @@ class GRDSAR(Application):
                 logger.warning((
                     "Some filenames in rtcApp.geocode_list configuration "+
                     "are different from those in rtcProc. Using names given"+
-                    " to grdApp."))
+                    " to grdApp. / rtcApp.geocode_list 与 rtcProc 不一致，采用 rtcApp 配置。"))
                 print("grdApp.geocode_list = {}".format(self.geocode_list))
                 print(("grdProc.geocode_list = {}".format(
                         self.grd.geocode_list)))
@@ -367,13 +369,14 @@ class GRDSAR(Application):
         print(self.__doc__)
         lsensors = list(SENSORS.keys())
         lsensors.sort()
-        print("The currently supported sensors are: ", lsensors)
+        print("The currently supported sensors are / 当前支持的传感器: ", lsensors)
         return None
 
     def help_steps(self):
         print(self.__doc__)
         print("A description of the individual steps can be found in the README file")
         print("and also in the ISCE.pdf document")
+        print("各步骤说明可在 README 与 ISCE.pdf 中查看。")
         return
 
 
@@ -407,15 +410,14 @@ class GRDSAR(Application):
     def _steps(self):
 
         self.step('startup', func=self.startup,
-                     doc=("Print a helpful message and "+
-                          "set the startTime of processing")
+                     doc=("Print a helpful message and set the startTime of processing / 输出帮助信息并记录开始时间")
                   )
 
         # Run a preprocessor for the two sets of frames
         self.step('preprocess',
                   func=self.runPreprocessor,
                   doc=(
-                """Unpack the input data"""
+                """Unpack the input data / 解包输入数据"""
                 )
                   )
 

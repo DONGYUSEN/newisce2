@@ -154,7 +154,9 @@ USE_HIGH_RESOLUTION_DEM_ONLY = Application.Parameter(
     doc=(
     """If True and a dem is not specified in input, it will only
     download the SRTM highest resolution dem if it is available
-    and fill the missing portion with null values (typically -32767)."""
+    and fill the missing portion with null values (typically -32767).
+    若为 True 且未在输入中指定 DEM，仅下载可用的最高分辨率 SRTM，
+    缺失区域用空值（通常 -32767）填充。"""
     )
                                                 )
 DEM_FILENAME = Application.Parameter(
@@ -163,7 +165,7 @@ DEM_FILENAME = Application.Parameter(
      default='',
      type=str,
      mandatory=False,
-     doc="Filename of the Digital Elevation Model (DEM)"
+     doc="Filename of the Digital Elevation Model (DEM) / DEM 文件路径"
                                      )
 
 GEOCODE_DEM_FILENAME = Application.Parameter(
@@ -172,7 +174,7 @@ GEOCODE_DEM_FILENAME = Application.Parameter(
         default='',
         type=str,
         mandatory=False,
-        doc='Filename of the DEM for geocoding')
+        doc='Filename of the DEM for geocoding / 地理编码 DEM 文件路径')
 
 GEOCODE_BOX = Application.Parameter(
     'geocode_bbox',
@@ -180,7 +182,7 @@ GEOCODE_BOX = Application.Parameter(
     default = None,
     container=list,
     type=float,
-    doc='Bounding box for geocoding - South, North, West, East in degrees'
+    doc='Bounding box for geocoding - South, North, West, East in degrees / 地理编码范围：南北西东（度）'
                                     )
 
 REGION_OF_INTEREST = Application.Parameter(
@@ -189,7 +191,7 @@ REGION_OF_INTEREST = Application.Parameter(
         default = None,
         container = list,
         type = float,
-        doc = 'Bounding box for unpacking data - South, North, West, East in degrees')
+        doc = 'Bounding box for unpacking data - South, North, West, East in degrees / 解包数据范围：南北西东（度）')
 
 PICKLE_DUMPER_DIR = Application.Parameter(
     'pickleDumpDir',
@@ -751,11 +753,11 @@ class TopsInSAR(Application):
 
 
     def Usage(self):
-        print("Usages: ")
-        print("topsApp.py <input-file.xml>")
-        print("topsApp.py --steps")
-        print("topsApp.py --help")
-        print("topsApp.py --help --steps")
+        print("Usages / 用法: ")
+        print("topsApp.py <input-file.xml>   # 使用配置文件运行")
+        print("topsApp.py --steps            # 分步骤运行")
+        print("topsApp.py --help             # 查看帮助")
+        print("topsApp.py --help --steps     # 查看步骤帮助")
 
 
     def _init(self):
@@ -812,7 +814,7 @@ class TopsInSAR(Application):
                 logger.warning((
                     "Some filenames in insarApp.geocode_list configuration "+
                     "are different from those in InsarProc. Using names given"+
-                    " to insarApp."))
+                    " to insarApp. / insarApp.geocode_list 与 InsarProc 不一致，采用 insarApp 配置。"))
                 print("insarApp.geocode_list = {}".format(self.geocode_list))
                 print(("InsarProc.geocode_list = {}".format(
                         self.insar.geocode_list)))
@@ -859,13 +861,14 @@ class TopsInSAR(Application):
         print(self.__doc__)
         lsensors = list(SENSORS.keys())
         lsensors.sort()
-        print("The currently supported sensors are: ", lsensors)
+        print("The currently supported sensors are / 当前支持的传感器: ", lsensors)
         return None
 
     def help_steps(self):
         print(self.__doc__)
         print("A description of the individual steps can be found in the README file")
         print("and also in the ISCE.pdf document")
+        print("各步骤说明可在 README 与 ISCE.pdf 中查看。")
         return
 
 
@@ -928,15 +931,14 @@ class TopsInSAR(Application):
     def _steps(self):
 
         self.step('startup', func=self.startup,
-                     doc=("Print a helpful message and "+
-                          "set the startTime of processing")
+                     doc=("Print a helpful message and set the startTime of processing / 输出帮助信息并记录开始时间")
                   )
 
         # Run a preprocessor for the two sets of frames
         self.step('preprocess',
                   func=self.runPreprocessor,
                   doc=(
-                """Preprocess the reference and secondary sensor data to raw images"""
+                """Preprocess the reference and secondary sensor data to raw images / 将主辅影像预处理为原始图像"""
                 )
                   )
 
@@ -944,7 +946,7 @@ class TopsInSAR(Application):
         self.step('computeBaselines',
                 func=self.runComputeBaseline,
                 doc=(
-                    """Compute baseline and number of common bursts"""
+                    """Compute baseline and number of common bursts / 计算基线和公共 burst 数量"""
                 )
                   )
 

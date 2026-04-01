@@ -248,7 +248,9 @@ USE_HIGH_RESOLUTION_DEM_ONLY = Application.Parameter(
     doc=(
     """If True and a dem is not specified in input, it will only
     download the SRTM highest resolution dem if it is available
-    and fill the missing portion with null values (typically -32767)."""
+    and fill the missing portion with null values (typically -32767).
+    若为 True 且未在输入中指定 DEM，仅下载可用的最高分辨率 SRTM，
+    缺失区域用空值（通常 -32767）填充。"""
     )
 )
 
@@ -258,7 +260,7 @@ DEM_FILENAME = Application.Parameter(
      default='',
      type=str,
      mandatory=False,
-     doc="Filename of the DEM init file"
+     doc="Filename of the DEM init file / DEM 初始化文件路径"
 )
 
 REGION_OF_INTEREST = Application.Parameter(
@@ -267,7 +269,7 @@ REGION_OF_INTEREST = Application.Parameter(
         default = None,
         container = list,
         type = float,
-        doc = 'Region of interest - South, North, West, East in degrees')
+        doc = 'Region of interest - South, North, West, East in degrees / 处理区域：南北西东（度）')
 
 
 GEOCODE_BOX = Application.Parameter(
@@ -276,7 +278,7 @@ GEOCODE_BOX = Application.Parameter(
     default = None,
     container=list,
     type=float,
-    doc='Bounding box for geocoding - South, North, West, East in degrees'
+    doc='Bounding box for geocoding - South, North, West, East in degrees / 地理编码范围：南北西东（度）'
                                     )
 
 GEO_POSTING = Application.Parameter(
@@ -286,7 +288,7 @@ GEO_POSTING = Application.Parameter(
     type=float,
     mandatory=False,
     doc=(
-    "Output posting for geocoded images in degrees (latitude = longitude)"
+    "Output posting for geocoded images in degrees (latitude = longitude) / 地理编码输出分辨率（度，纬经相同）"
     )
                                     )
 
@@ -296,7 +298,7 @@ POSTING = Application.Parameter(
     default=30,
     type=int,
     mandatory=False,
-    doc="posting for interferogram")
+    doc="posting for interferogram / 干涉图目标像元间距")
 
 
 NUMBER_RANGE_LOOKS = Application.Parameter(
@@ -305,7 +307,7 @@ NUMBER_RANGE_LOOKS = Application.Parameter(
     default=None,
     type=int,
     mandatory=False,
-    doc='Number of range looks'
+    doc='Number of range looks / 距离向多视数'
                                     )
 
 NUMBER_AZIMUTH_LOOKS = Application.Parameter(
@@ -314,7 +316,7 @@ NUMBER_AZIMUTH_LOOKS = Application.Parameter(
     default=None,
     type=int,
     mandatory=False,
-    doc='Number of azimuth looks'
+    doc='Number of azimuth looks / 方位向多视数'
                                  )
 
 FILTER_STRENGTH = Application.Parameter('filterStrength',
@@ -330,7 +332,7 @@ USE_GPU = Application.Parameter(
     default=True,
     type=bool,
     mandatory=False,
-    doc='Prefer GPU-enabled processing where stripmap pipeline supports it.'
+    doc='Prefer GPU-enabled processing where stripmap pipeline supports it. / 在 stripmap 支持的步骤优先使用 GPU。'
 )
 
 ############################################## Modified by V.Brancato 10.07.2019
@@ -737,11 +739,11 @@ class _RoiBase(Application, FrameMixin):
         return None
 
     def Usage(self):
-        print("Usages: ")
-        print("stripmapApp.py <input-file.xml>")
-        print("stripmapApp.py --steps")
-        print("stripmapApp.py --help")
-        print("stripmapApp.py --help --steps")
+        print("Usages / 用法: ")
+        print("stripmapApp.py <input-file.xml>   # 使用配置文件运行")
+        print("stripmapApp.py --steps            # 分步骤运行")
+        print("stripmapApp.py --help             # 查看帮助")
+        print("stripmapApp.py --help --steps     # 查看步骤帮助")
 
     def _init(self):
 
@@ -798,7 +800,7 @@ class _RoiBase(Application, FrameMixin):
                 logger.warning((
                     "Some filenames in stripmapApp.geocode_list configuration "+
                     "are different from those in StripmapProc. Using names given"+
-                    " to stripmapApp."))
+                    " to stripmapApp. / stripmapApp.geocode_list 与 StripmapProc 不一致，采用 stripmapApp 配置。"))
                 print("stripmapApp.geocode_list = {}".format(self.geocode_list))
         else:
             self.geocode_list = self.insar.geocode_list
@@ -843,13 +845,14 @@ class _RoiBase(Application, FrameMixin):
         print(self.__doc__)
         lsensors = list(SENSORS.keys())
         lsensors.sort()
-        print("The currently supported sensors are: ", lsensors)
+        print("The currently supported sensors are / 当前支持的传感器: ", lsensors)
         return None
 
     def help_steps(self):
         print(self.__doc__)
         print("A description of the individual steps can be found in the README file")
         print("and also in the ISCE.pdf document")
+        print("各步骤说明可在 README 与 ISCE.pdf 中查看。")
         return
 
     def renderProcDoc(self):
@@ -872,7 +875,7 @@ class _RoiBase(Application, FrameMixin):
                 merged = (post_args + " " + extra).strip() if post_args else extra
                 post_args = merged
                 logger.info(
-                    "Auto postprocess stripmap wavelength override enabled: %.12g m",
+                    "Auto postprocess stripmap wavelength override enabled: %.12g m / 已启用 stripmap 自动波长覆盖",
                     auto_wvl,
                 )
 
@@ -917,15 +920,14 @@ class _RoiBase(Application, FrameMixin):
     def _steps(self):
 
         self.step('startup', func=self.startup,
-                     doc=("Print a helpful message and "+
-                          "set the startTime of processing")
+                     doc=("Print a helpful message and set the startTime of processing / 输出帮助信息并记录开始时间")
                   )
 
         # Run a preprocessor for the two sets of frames
         self.step('preprocess',
                   func=self.runPreprocessor,
                   doc=(
-                """Preprocess the reference and secondary sensor data to raw images"""
+                """Preprocess the reference and secondary sensor data to raw images / 将主辅影像预处理为原始图像"""
                 )
                   )
 
