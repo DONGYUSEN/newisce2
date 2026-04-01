@@ -43,6 +43,8 @@ set(installfiles
     SAOCOM_SLC.py
     Lutan1.py
     Tianyi.py
+    ALOS4.py
+    Capella.py
     )
 
 if(HDF5_FOUND)
