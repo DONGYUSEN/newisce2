@@ -319,6 +319,15 @@ NUMBER_AZIMUTH_LOOKS = Application.Parameter(
     doc='Number of azimuth looks / 方位向多视数'
                                  )
 
+RANGE_CROP_FAR_PIXELS = Application.Parameter(
+    'rangeCropFarPixels',
+    public_name='rangeCropFarPixels',
+    default=None,
+    type=int,
+    mandatory=False,
+    doc='Crop N pixels at far-range edge for sensors that support it (e.g., Lutan1) / 对支持该参数的传感器（如 Lutan1）在远距端裁剪像素数'
+)
+
 FILTER_STRENGTH = Application.Parameter('filterStrength',
                                       public_name='filter strength',
                                       default=0.5,
@@ -679,6 +688,7 @@ class _RoiBase(Application, FrameMixin):
                       POSTING,
                       NUMBER_RANGE_LOOKS,
                       NUMBER_AZIMUTH_LOOKS,
+                      RANGE_CROP_FAR_PIXELS,
                       GEOCODE_LIST,
                       OFFSET_GEOCODE_LIST,
                       GEOCODE_BOX,
@@ -817,6 +827,20 @@ class _RoiBase(Application, FrameMixin):
             if g_count > 0:
                 self.off_geocode_list = self.insar.off_geocode_list
 
+        # Compatibility: allow app-level rangeCropFarPixels in stripmapApp XML.
+        if self.rangeCropFarPixels is not None:
+            for role, sensor in (('reference', self.reference), ('secondary', self.secondary)):
+                if hasattr(sensor, 'rangeCropFarPixels'):
+                    sensor.rangeCropFarPixels = int(self.rangeCropFarPixels)
+                    logger.info(
+                        'Applying stripmapApp.rangeCropFarPixels=%d to %s sensor.',
+                        int(self.rangeCropFarPixels), role
+                    )
+                else:
+                    logger.warning(
+                        'stripmapApp.rangeCropFarPixels is set, but %s sensor does not support it; ignored.',
+                        role
+                    )
 
         return None
 
