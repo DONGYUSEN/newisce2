@@ -7,6 +7,7 @@
 
 import os
 import glob
+import zipfile
 import numpy as np
 import xml.etree.ElementTree as ET
 import datetime
@@ -52,6 +53,14 @@ ORBIT_FILE = Component.Parameter('orbitFile',
                             default = None,
                             type=str,
                             doc = 'Orbit file')
+
+SAFE = Component.Parameter(
+    'safe',
+    public_name='safe',
+    default=None,
+    type=str,
+    doc='Lutan product directory or zip file'
+)
 
 ORBIT_FILTER = Component.Parameter(
     'orbitFilter',
@@ -116,6 +125,7 @@ class Lutan1(Sensor):
     logging_name = 'isce.sensor.Lutan1'
 
     parameter_list = (
+        SAFE,
         TIFF,
         ORBIT_FILE,
         ORBIT_FILTER,
@@ -133,16 +143,124 @@ class Lutan1(Sensor):
         self._xml_root = None
         self.doppler_coeff = None
 
-    def parse(self):
-        xmlFileName = self.tiff[:-4] + "meta.xml"
-        self.xml = xmlFileName
+    @staticmethod
+    def _is_tiff_name(name):
+        low = name.lower()
+        return low.endswith('.tif') or low.endswith('.tiff')
 
-        with open(self.xml, 'r') as fid:
-            xmlstr = fid.read()
-        
+    @staticmethod
+    def _meta_from_tiff_name(name):
+        base, _ = os.path.splitext(name)
+        return base + '.meta.xml'
+
+    def _resolve_inputs_from_safe(self):
+        if not self.safe:
+            return
+
+        safe = self.safe.rstrip('/')
+        self.safe = safe
+
+        if safe.lower().endswith('.zip'):
+            zabs = os.path.abspath(safe)
+            with zipfile.ZipFile(zabs, 'r') as zf:
+                members = zf.namelist()
+            by_lower = {m.lower(): m for m in members}
+
+            tiffs = sorted([m for m in members if (not m.endswith('/')) and self._is_tiff_name(m)])
+            if len(tiffs) == 0:
+                raise Exception('No TIFF file found in zip: {}'.format(safe))
+
+            chosen_tiff = None
+            chosen_xml = None
+            for tif in tiffs:
+                meta = self._meta_from_tiff_name(tif)
+                if meta.lower() in by_lower:
+                    chosen_tiff = tif
+                    chosen_xml = by_lower[meta.lower()]
+                    break
+
+            if chosen_tiff is None:
+                chosen_tiff = tiffs[0]
+                meta = self._meta_from_tiff_name(chosen_tiff)
+                if meta.lower() in by_lower:
+                    chosen_xml = by_lower[meta.lower()]
+
+            if self.tiff is None:
+                self.tiff = '/vsizip/{}/{}'.format(zabs, chosen_tiff.lstrip('/'))
+
+            if self.xml is None:
+                if chosen_xml is None:
+                    raise Exception(
+                        'No matching .meta.xml found for TIFF {} in zip {}'.format(chosen_tiff, safe)
+                    )
+                self.xml = '/vsizip/{}/{}'.format(zabs, chosen_xml.lstrip('/'))
+            return
+
+        if os.path.isdir(safe):
+            tiffs = sorted(glob.glob(os.path.join(safe, '**', '*.tif'), recursive=True))
+            tiffs += sorted(glob.glob(os.path.join(safe, '**', '*.tiff'), recursive=True))
+            if len(tiffs) == 0:
+                raise Exception('No TIFF file found in directory: {}'.format(safe))
+
+            chosen_tiff = None
+            chosen_xml = None
+            for tif in tiffs:
+                meta = self._meta_from_tiff_name(tif)
+                if os.path.isfile(meta):
+                    chosen_tiff = tif
+                    chosen_xml = meta
+                    break
+
+            if chosen_tiff is None:
+                chosen_tiff = tiffs[0]
+                meta = self._meta_from_tiff_name(chosen_tiff)
+                if os.path.isfile(meta):
+                    chosen_xml = meta
+
+            if self.tiff is None:
+                self.tiff = chosen_tiff
+
+            if self.xml is None:
+                if chosen_xml is None:
+                    raise Exception(
+                        'No matching .meta.xml found for TIFF {} in directory {}'.format(chosen_tiff, safe)
+                    )
+                self.xml = chosen_xml
+            return
+
+        raise Exception('safe path does not exist or is invalid: {}'.format(safe))
+
+    def parse(self):
+        if (self.tiff is None or self.xml is None) and self.safe:
+            self._resolve_inputs_from_safe()
+
+        if self.xml is None:
+            if self.tiff is None:
+                raise Exception('Provide safe, or provide tiff/xml for Lutan1 parser.')
+            tifBase, tifExt = os.path.splitext(self.tiff)
+            if tifExt.lower() not in ['.tif', '.tiff']:
+                raise Exception('Unexpected TIFF extension for Lutan1 input: {}'.format(self.tiff))
+            self.xml = tifBase + '.meta.xml'
+
+        if self.xml.startswith('/vsizip/'):
+            vsipath = self.xml[len('/vsizip/'):]
+            if '.zip/' not in vsipath:
+                raise Exception('Invalid /vsizip xml path: {}'.format(self.xml))
+
+            zipname, member = vsipath.split('.zip/', 1)
+            zipname = zipname + '.zip'
+            if not zipname.startswith('/'):
+                zipname = '/' + zipname
+
+            with zipfile.ZipFile(zipname, 'r') as zf:
+                xmlbytes = zf.read(member)
+            xmlstr = xmlbytes.decode('utf-8', errors='replace')
+        else:
+            with open(self.xml, 'r') as fid:
+                xmlstr = fid.read()
+
         self._xml_root = ET.fromstring(xmlstr)
         self.populateMetadata()
-        fid.close()
 
         if self.orbitFile:
             # Check if orbit file exists or not
