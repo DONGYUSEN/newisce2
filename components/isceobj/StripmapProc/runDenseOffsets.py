@@ -21,6 +21,21 @@ def _safe_float_env(name, default):
         return float(default)
 
 
+def _safe_bool(value, default=False):
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    sval = str(value).strip().lower()
+    if sval in ('1', 'true', 'yes', 'on', 'y', 't'):
+        return True
+    if sval in ('0', 'false', 'no', 'off', 'n', 'f', 'none', 'null', ''):
+        return False
+    return bool(default)
+
+
 def _ensure_binary_slc(infile):
     '''
     Dense offset modules expect a binary ENVI payload in addition to VRT/XML metadata.
@@ -234,7 +249,12 @@ def runDenseOffsets(self):
     denseCovThreshold = _safe_float_env('ISCE_DENSE_OFFSET_COV_THRESHOLD', 1.0e6)
 
     field = None
-    use_gpu = bool(getattr(self, 'useGPU', False))
+    use_gpu_raw = getattr(self, 'useGPU', False)
+    use_gpu = _safe_bool(use_gpu_raw, default=False)
+    logger.info(
+        'Dense offsets useGPU raw=%r (type=%s) parsed=%s',
+        use_gpu_raw, type(use_gpu_raw).__name__, use_gpu
+    )
     gpu_available = False
     if use_gpu:
         try:

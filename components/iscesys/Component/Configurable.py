@@ -66,10 +66,39 @@ def containerize(a, ttyp, ctyp):
     #of type ttyp and then cast to the container type (ctyp).  It is
     #required that the constructor of the container type takes a list
     #as argument (as is the case for list, tuple, numpy.array to name a few).
+    def _cast_token(token):
+        token = token.strip()
+        if ttyp is bool:
+            return to_bool(token)
+        return ttyp(token)
+
     if ',' in a:
-        return ctyp([ttyp(x.strip()) for x in a.split(',')])
+        return ctyp([_cast_token(x) for x in a.split(',')])
     else:
-        return ctyp([ttyp(x.strip()) for x in a.split()])
+        return ctyp([_cast_token(x) for x in a.split()])
+
+
+def to_bool(value):
+    """
+    Robust bool conversion for XML/config inputs.
+    """
+    if isinstance(value, bool):
+        return value
+
+    if value is None:
+        return False
+
+    if isinstance(value, (int, float)):
+        return value != 0
+
+    if isinstance(value, str):
+        sval = value.strip().lower()
+        if sval in ('1', 'true', 'yes', 'on', 'y', 't'):
+            return True
+        if sval in ('0', 'false', 'no', 'off', 'n', 'f', 'none', 'null', ''):
+            return False
+
+    return bool(value)
 
 
 def apply_type(value, dtype, ctype=None):
@@ -81,6 +110,13 @@ def apply_type(value, dtype, ctype=None):
     '''
     if isinstance(dtype, str):
         dtype = traits[dtype]
+
+    if dtype is bool:
+        if ctype:
+            if isinstance(ctype, str):
+                ctype = traits[ctype]
+            return containerize(value, dtype, ctype)
+        return to_bool(value)
 
     #Check if container is defined
     if ctype:
