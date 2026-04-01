@@ -170,6 +170,7 @@ def _integrated_external_config():
             [64, 128, 256, 512, 1024],
         ),
         'coarse_window_scale': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_COARSE_WINDOW_SCALE', 4.0),
+        'coarse_grid_size': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_COARSE_GRID_SIZE', 3),
         'coarse_consistency_priority': _parse_bool_env(
             'ISCE_EXTERNAL_REGISTRATION_COARSE_CONSISTENCY_PRIORITY',
             True,
@@ -180,7 +181,7 @@ def _integrated_external_config():
         ),
         'coarse_min_window': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_COARSE_MIN_WINDOW', 96),
         'coarse_max_window': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_COARSE_MAX_WINDOW', 4096),
-        'coarse_min_valid': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_COARSE_MIN_VALID', 3),
+        'coarse_min_valid': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_COARSE_MIN_VALID', 9),
         'coarse_prefer_larger_window': _parse_bool_env(
             'ISCE_EXTERNAL_REGISTRATION_COARSE_PREFER_LARGER_WINDOW',
             True,
@@ -695,14 +696,18 @@ def runRefineSecondaryTiming(self):
     outShelveFile = os.path.join(misregDir, self.insar.misregFilename)
     fallback_cfg = _fallback_fit_config(self)
 
-    prefer_gpu_ampcor = _prefer_gpu_ampcor()
-    gpu_available = _gpu_ampcor_available(self) if prefer_gpu_ampcor else False
-    external_forced = False
+    # Policy:
+    # 1) useGPU=False (explicitly configured) => force integrated external registration.
+    # 2) useGPU=True or omitted (default True) => use GPU Ampcor path; do not auto-switch
+    #    to integrated external registration.
+    use_gpu_flag = bool(getattr(self, 'useGPU', False))
+    external_enabled = False
 
-    if prefer_gpu_ampcor:
+    if use_gpu_flag:
+        gpu_available = _gpu_ampcor_available(self)
         if gpu_available:
             try:
-                logger.info('GPU is available. Running GPU Ampcor first for misregistration.')
+                logger.info('useGPU=True (or default). Running GPU Ampcor for misregistration.')
                 gpu_prefix = os.path.join(misregDir, 'gpu_ampcor_offsets')
                 field = estimateOffsetFieldGPU(referenceSlc, secondarySlc, gpu_prefix)
                 logger.info('GPU Ampcor fit configuration: %s', fallback_cfg)
@@ -719,22 +724,22 @@ def runRefineSecondaryTiming(self):
                 return None
             except Exception as err:
                 logger.warning(
-                    'GPU Ampcor failed (%s). Falling back to integrated external registration.',
+                    'GPU Ampcor failed (%s). Integrated external registration is disabled under '
+                    'useGPU=True policy; continuing to CPU Ampcor fallback/zero-poly policy.',
                     err,
                     exc_info=True,
                 )
-                external_forced = True
         else:
-            logger.info(
-                'GPU Ampcor is preferred but unavailable; using integrated external registration.'
+            logger.warning(
+                'useGPU=True (or default), but GPU Ampcor is unavailable. '
+                'Integrated external registration is disabled under useGPU=True policy; '
+                'continuing to CPU Ampcor fallback/zero-poly policy.'
             )
-            external_forced = True
-
-    external_enabled = _integrated_external_enabled()
-    if external_forced and (not external_enabled):
-        logger.warning(
-            'ISCE_EXTERNAL_REGISTRATION_ENABLED is False, but forcing integrated external '
-            'registration because GPU Ampcor is unavailable/failed.'
+        external_enabled = False
+    else:
+        logger.info(
+            'useGPU=False detected. Forcing integrated external registration '
+            '(coarse + fine registration).'
         )
         external_enabled = True
 

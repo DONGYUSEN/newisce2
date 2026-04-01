@@ -21,7 +21,8 @@ _DEFAULT_CONFIG = {
     'coarse_correlation_threshold': 0.06,
     'coarse_min_window': 96,
     'coarse_max_window': 4096,
-    'coarse_min_valid': 3,
+    'coarse_grid_size': 3,
+    'coarse_min_valid': 9,
     'coarse_prefer_larger_window': True,
     'coarse_log_candidates': True,
     'coarse_quality_threshold': 0.06,
@@ -321,12 +322,9 @@ def _coarse_candidate_windows(master_amp, cfg):
 def _coarse_registration_for_window(master_amp, slave_amp, window, search_range, cfg):
     h, w = master_amp.shape
 
-    positions = [
-        (h * 0.25, w * 0.25),
-        (h * 0.25, w * 0.75),
-        (h * 0.75, w * 0.25),
-        (h * 0.75, w * 0.75),
-    ]
+    grid_size = max(3, int(cfg.get('coarse_grid_size', 3)))
+    fracs = np.linspace(0.25, 0.75, grid_size, dtype=np.float64)
+    positions = [(h * fr, w * fc) for fr in fracs for fc in fracs]
 
     az = []
     rg = []
@@ -349,7 +347,8 @@ def _coarse_registration_for_window(master_amp, slave_amp, window, search_range,
         rg.append(drg)
         qualities.append(q)
 
-    required_valid = max(2, int(cfg.get('coarse_min_valid', 3)))
+    # Enforce at least 3x3 valid coarse points by default.
+    required_valid = min(len(positions), max(9, int(cfg.get('coarse_min_valid', 9))))
     if len(az) < required_valid:
         return {
             'status': 'failed',

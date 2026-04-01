@@ -1,0 +1,1256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ISCE2 XML 与命令生成器（标签页版）</title>
+  <style>
+    :root {
+      --bg: #eef3ee;
+      --panel: #ffffff;
+      --line: #cad5ca;
+      --ink: #1f2a1f;
+      --muted: #5d6e5d;
+      --accent: #1a7a61;
+      --accent-2: #2f5f7b;
+      --accent-3: #9a6227;
+      --tab: #dfe9df;
+      --tab-active: #ffffff;
+      --radius: 12px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 8%, rgba(26,122,97,0.08), rgba(26,122,97,0) 40%),
+        radial-gradient(circle at 92% 0%, rgba(47,95,123,0.09), rgba(47,95,123,0) 35%),
+        var(--bg);
+      font-family: "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.45;
+    }
+
+    .wrap {
+      max-width: 1260px;
+      margin: 0 auto;
+      padding: 20px 14px 30px;
+    }
+
+    .hero {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(120deg, #ffffff 0%, #f5fbf8 60%, #f4f8fc 100%);
+      padding: 16px;
+      box-shadow: 0 8px 18px rgba(31,42,31,0.05);
+    }
+
+    .hero h1 {
+      margin: 0 0 6px;
+      font-size: 27px;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .tabs {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+    }
+
+    .tab-btn {
+      border: 1px solid var(--line);
+      background: var(--tab);
+      color: #2c3b2c;
+      border-radius: 10px;
+      padding: 8px 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .tab-btn.active {
+      background: var(--tab-active);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .tab-panel {
+      display: none;
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: 0 8px 18px rgba(31,42,31,0.05);
+      overflow: hidden;
+    }
+
+    .tab-panel.active { display: block; }
+
+    .panel-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fbf8;
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      font-size: 20px;
+    }
+
+    .panel-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .panel-body {
+      padding: 12px 14px 14px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .field { grid-column: span 12; }
+    .span-2 { grid-column: span 2; }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+
+    label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 13px;
+      color: #314131;
+      font-weight: 650;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea,
+    input[type="url"] {
+      width: 100%;
+      border: 1px solid #bfcabf;
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(26,122,97,0.14);
+    }
+
+    textarea {
+      min-height: 125px;
+      resize: vertical;
+      font-family: "Fira Code", "JetBrains Mono", "Consolas", monospace;
+      line-height: 1.45;
+    }
+
+    .checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding-top: 2px;
+    }
+
+    .checks label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .btns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0 10px;
+    }
+
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn-main { background: var(--accent); color: #fff; }
+    .btn-copy { background: var(--accent-2); color: #fff; }
+    .btn-save { background: var(--accent-3); color: #fff; }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .small-note {
+      margin-top: 3px;
+      color: #5f6f5f;
+      font-size: 12px;
+    }
+
+    .warn {
+      color: #b5481a;
+      font-size: 12px;
+      margin-top: 3px;
+    }
+
+    .term-box {
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 8px 18px rgba(31,42,31,0.05);
+      overflow: hidden;
+    }
+
+    .term-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fbf8;
+    }
+
+    .term-head h2 {
+      margin: 0;
+      font-size: 19px;
+    }
+
+    .term-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .term-body { padding: 12px 14px 14px; }
+
+    .terminal {
+      margin-top: 6px;
+      background: #0f1a14;
+      color: #ccf3d7;
+      border-radius: 10px;
+      border: 1px solid #203428;
+      min-height: 170px;
+      padding: 10px;
+      font-family: "Fira Code", "JetBrains Mono", "Consolas", monospace;
+      font-size: 12px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    .terminal-input {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .prompt {
+      text-align: center;
+      border: 1px solid #bfcabf;
+      border-radius: 8px;
+      background: #f4f8f4;
+      padding: 7px 0;
+      font-size: 12px;
+      color: #385038;
+      font-family: "Fira Code", "JetBrains Mono", monospace;
+    }
+
+    iframe {
+      width: 100%;
+      height: 320px;
+      border: 1px solid #c1ccc1;
+      border-radius: 10px;
+      background: #fafafa;
+    }
+
+    footer {
+      margin-top: 10px;
+      text-align: center;
+      color: #617061;
+      font-size: 12px;
+    }
+
+    @media (max-width: 980px) {
+      .split { grid-template-columns: 1fr; }
+      .span-2, .span-3, .span-4, .span-5, .span-6, .span-8 { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>ISCE2 XML 与命令行生成器</h1>
+      <p>三标签页：`GRD`、`干涉处理`、`Stack`。已按 ISCE2 支持的传感器列表提供选择，并在底部加入远程终端辅助窗口。</p>
+    </section>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab-btn active" data-tab="tab-grd">GRD</button>
+      <button class="tab-btn" data-tab="tab-insar">干涉处理</button>
+      <button class="tab-btn" data-tab="tab-stack">Stack</button>
+    </nav>
+
+    <section class="tab-panel active" id="tab-grd">
+      <div class="panel-head">
+        <h2>GRD 处理（rtcApp）</h2>
+        <p>支持 GRD 传感器：`SENTINEL1`、`RADARSAT2`、`TERRASARX`。</p>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="field span-3">
+            <label for="grdXmlName">XML 文件名</label>
+            <input id="grdXmlName" type="text" value="rtcApp.xml" />
+          </div>
+          <div class="field span-3">
+            <label for="grdSensor">传感器</label>
+            <select id="grdSensor"></select>
+          </div>
+          <div class="field span-6">
+            <label for="grdInput">reference 输入（safe/zip/目录）</label>
+            <input id="grdInput" type="text" placeholder="/data/S1A_xxx.zip" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-3">
+            <label for="grdRefOut">reference output</label>
+            <input id="grdRefOut" type="text" value="reference" />
+          </div>
+          <div class="field span-3">
+            <label for="grdOrbitDir">orbit directory</label>
+            <input id="grdOrbitDir" type="text" placeholder="/data/orbits" />
+          </div>
+          <div class="field span-3">
+            <label for="grdAuxDir">aux directory</label>
+            <input id="grdAuxDir" type="text" placeholder="/data/aux" />
+          </div>
+          <div class="field span-3">
+            <label for="grdDem">DEM</label>
+            <input id="grdDem" type="text" placeholder="/data/dem.dem" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-2">
+            <label for="grdRlooks">range looks</label>
+            <input id="grdRlooks" type="number" min="1" placeholder="4" />
+          </div>
+          <div class="field span-2">
+            <label for="grdAlooks">azimuth looks</label>
+            <input id="grdAlooks" type="number" min="1" placeholder="2" />
+          </div>
+          <div class="field span-2">
+            <label for="grdPosting">posting</label>
+            <input id="grdPosting" type="number" step="0.1" placeholder="10" />
+          </div>
+          <div class="field span-2">
+            <label for="grdEpsg">epsg id</label>
+            <input id="grdEpsg" type="text" placeholder="32650" />
+          </div>
+          <div class="field span-2">
+            <label for="grdGspacing">gspacing(m)</label>
+            <input id="grdGspacing" type="number" step="0.1" placeholder="20" />
+          </div>
+          <div class="field span-2">
+            <label for="grdPolarizations">polarizations</label>
+            <input id="grdPolarizations" type="text" placeholder="['VV']" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-6">
+            <label for="grdBbox">geocode bounding box (SNWE)</label>
+            <input id="grdBbox" type="text" placeholder="[31.0, 32.0, 118.0, 119.0]" />
+          </div>
+          <div class="field span-3">
+            <label for="grdWorkDir">命令工作目录</label>
+            <input id="grdWorkDir" type="text" value="." />
+          </div>
+          <div class="field span-3">
+            <label for="grdSteps">steps（start/end）</label>
+            <input id="grdSteps" type="text" placeholder="例如: preprocess:geocode" />
+            <div class="small-note">格式：`start:end`，可留空</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-12">
+            <label>选项</label>
+            <div class="checks">
+              <label><input id="grdUseHighResDem" type="checkbox" /> useHighResolutionDemOnly</label>
+              <label><input id="grdApplyWater" type="checkbox" /> apply water mask</label>
+              <label><input id="grdApplyThermal" type="checkbox" /> apply thermal noise correction</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="btns">
+          <button class="btn-main" id="btnGenGrd">生成 GRD XML 与命令</button>
+          <button class="btn-copy" id="btnCopyGrdXml">复制 XML</button>
+          <button class="btn-copy" id="btnCopyGrdCmd">复制命令</button>
+          <button class="btn-save" id="btnSaveGrdXml">下载 XML</button>
+        </div>
+
+        <div class="split">
+          <div>
+            <label for="grdXmlOut">GRD XML</label>
+            <textarea id="grdXmlOut" readonly></textarea>
+          </div>
+          <div>
+            <label for="grdCmdOut">GRD 命令</label>
+            <textarea id="grdCmdOut" readonly></textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="tab-insar">
+      <div class="panel-head">
+        <h2>干涉处理（topsApp / stripmapApp）</h2>
+        <p>TOPS 模式自动限制为 `SENTINEL1`；Stripmap 模式可选 ISCE2 Stripmap 支持传感器（含 Tianyi/Lutan/ALOS4/Capella）。</p>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="field span-3">
+            <label for="insarMode">流程类型</label>
+            <select id="insarMode">
+              <option value="tops">TOPS (topsApp.py)</option>
+              <option value="stripmap">Stripmap (stripmapApp.py)</option>
+            </select>
+          </div>
+          <div class="field span-3">
+            <label for="insarXmlName">XML 文件名</label>
+            <input id="insarXmlName" type="text" value="insarApp.xml" />
+          </div>
+          <div class="field span-3">
+            <label for="insarSensor">传感器</label>
+            <select id="insarSensor"></select>
+          </div>
+          <div class="field span-3">
+            <label for="insarWorkDir">命令工作目录</label>
+            <input id="insarWorkDir" type="text" value="." />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-4">
+            <label for="insarRefInput">reference 输入（safe/zip/xml）</label>
+            <input id="insarRefInput" type="text" placeholder="/data/ref.zip" />
+          </div>
+          <div class="field span-4">
+            <label for="insarSecInput">secondary 输入（safe/zip/xml）</label>
+            <input id="insarSecInput" type="text" placeholder="/data/sec.zip" />
+          </div>
+          <div class="field span-4">
+            <label for="insarDem">DEM</label>
+            <input id="insarDem" type="text" placeholder="/data/dem.dem" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-3">
+            <label for="insarRefOut">reference output</label>
+            <input id="insarRefOut" type="text" value="reference" />
+          </div>
+          <div class="field span-3">
+            <label for="insarSecOut">secondary output</label>
+            <input id="insarSecOut" type="text" value="secondary" />
+          </div>
+          <div class="field span-3">
+            <label for="insarOrbitDir">orbit directory</label>
+            <input id="insarOrbitDir" type="text" placeholder="/data/orbits" />
+          </div>
+          <div class="field span-3">
+            <label for="insarAuxDir">aux directory</label>
+            <input id="insarAuxDir" type="text" placeholder="/data/aux" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-2">
+            <label for="insarRlooks">range looks</label>
+            <input id="insarRlooks" type="number" min="1" placeholder="9" />
+          </div>
+          <div class="field span-2">
+            <label for="insarAlooks">azimuth looks</label>
+            <input id="insarAlooks" type="number" min="1" placeholder="3" />
+          </div>
+          <div class="field span-2">
+            <label for="insarUnwrapper">unwrapper name</label>
+            <select id="insarUnwrapper">
+              <option value="snaphu">snaphu</option>
+              <option value="snaphu_mcf">snaphu_mcf</option>
+              <option value="grass">grass</option>
+              <option value="icu">icu</option>
+            </select>
+          </div>
+          <div class="field span-2">
+            <label for="insarRangeCropFar">rangeCropFarPixels</label>
+            <input id="insarRangeCropFar" type="number" min="0" placeholder="1200" />
+          </div>
+          <div class="field span-4">
+            <label for="insarSteps">steps（start:end）</label>
+            <input id="insarSteps" type="text" placeholder="例如: startup:filter" />
+            <div class="small-note">TOPS/Stripmap 均可留空</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-6">
+            <label for="insarBbox">geocode bounding box (SNWE)</label>
+            <input id="insarBbox" type="text" placeholder="[31.0, 32.0, 118.0, 119.0]" />
+          </div>
+          <div class="field span-6">
+            <label for="insarRoi">region of interest (SNWE)</label>
+            <input id="insarRoi" type="text" placeholder="[31.1, 31.9, 118.2, 118.8]" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-12">
+            <label>选项</label>
+            <div class="checks">
+              <label><input id="insarDoUnwrap" type="checkbox" checked /> do unwrap</label>
+              <label><input id="insarUseGPU" type="checkbox" checked /> use GPU</label>
+              <label><input id="insarSplitCatalog" type="checkbox" /> 分文件导出 reference.xml / secondary.xml</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="row" id="insarSplitNamesRow" style="display:none;">
+          <div class="field span-6">
+            <label for="insarRefXmlName">reference XML 文件名</label>
+            <input id="insarRefXmlName" type="text" value="reference.xml" />
+          </div>
+          <div class="field span-6">
+            <label for="insarSecXmlName">secondary XML 文件名</label>
+            <input id="insarSecXmlName" type="text" value="secondary.xml" />
+          </div>
+        </div>
+
+        <div class="btns">
+          <button class="btn-main" id="btnGenInsar">生成干涉 XML 与命令</button>
+          <button class="btn-copy" id="btnCopyInsarXml">复制 XML</button>
+          <button class="btn-copy" id="btnCopyInsarCmd">复制命令</button>
+          <button class="btn-save" id="btnSaveInsarXml">下载 XML</button>
+          <button class="btn-copy" id="btnCopyRefXml" style="display:none;">复制 reference.xml</button>
+          <button class="btn-copy" id="btnCopySecXml" style="display:none;">复制 secondary.xml</button>
+          <button class="btn-save" id="btnSaveRefXml" style="display:none;">下载 reference.xml</button>
+          <button class="btn-save" id="btnSaveSecXml" style="display:none;">下载 secondary.xml</button>
+        </div>
+
+        <div class="split">
+          <div>
+            <label for="insarXmlOut">干涉 XML</label>
+            <textarea id="insarXmlOut" readonly></textarea>
+          </div>
+          <div>
+            <label for="insarCmdOut">干涉命令</label>
+            <textarea id="insarCmdOut" readonly></textarea>
+          </div>
+        </div>
+
+        <div class="split" id="insarSplitOutputs" style="display:none; margin-top:8px;">
+          <div>
+            <label for="insarRefXmlOut">reference.xml</label>
+            <textarea id="insarRefXmlOut" readonly></textarea>
+          </div>
+          <div>
+            <label for="insarSecXmlOut">secondary.xml</label>
+            <textarea id="insarSecXmlOut" readonly></textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="tab-stack">
+      <div class="panel-head">
+        <h2>Stack 处理（stackSentinel / stackStripMap）</h2>
+        <p>TOPS Stack 是 Sentinel-1 专用。Stripmap Stack 支持按 `-S` 选择 Stripmap 传感器。</p>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="field span-3">
+            <label for="stackMode">Stack 类型</label>
+            <select id="stackMode">
+              <option value="tops">TOPS Stack (stackSentinel.py)</option>
+              <option value="stripmap">Stripmap Stack (stackStripMap.py)</option>
+            </select>
+          </div>
+          <div class="field span-3">
+            <label for="stackXmlName">参数 XML 文件名</label>
+            <input id="stackXmlName" type="text" value="stackConfig.xml" />
+          </div>
+          <div class="field span-3">
+            <label for="stackSensor">传感器（仅 Stripmap 用）</label>
+            <select id="stackSensor"></select>
+          </div>
+          <div class="field span-3">
+            <label for="stackWorkflow">workflow</label>
+            <select id="stackWorkflow"></select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-4">
+            <label for="stackSlcDir">slc_directory</label>
+            <input id="stackSlcDir" type="text" placeholder="/data/slc" />
+          </div>
+          <div class="field span-4">
+            <label for="stackWorkDir">working_directory</label>
+            <input id="stackWorkDir" type="text" value="./stack_work" />
+          </div>
+          <div class="field span-4">
+            <label for="stackDem">dem</label>
+            <input id="stackDem" type="text" placeholder="/data/dem.dem" />
+          </div>
+        </div>
+
+        <div class="row" id="stackTopsExtraRow">
+          <div class="field span-4">
+            <label for="stackOrbitDir">orbit_directory (TOPS)</label>
+            <input id="stackOrbitDir" type="text" placeholder="/data/orbits" />
+          </div>
+          <div class="field span-4">
+            <label for="stackAuxDir">aux_directory (TOPS)</label>
+            <input id="stackAuxDir" type="text" placeholder="/data/aux" />
+          </div>
+          <div class="field span-4">
+            <label for="stackPolarization">polarization (TOPS)</label>
+            <input id="stackPolarization" type="text" value="vv" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-3">
+            <label for="stackRefDate">reference_date</label>
+            <input id="stackRefDate" type="text" placeholder="YYYYMMDD 或 YYYY-MM-DD" />
+          </div>
+          <div class="field span-3">
+            <label for="stackBbox">bbox (SNWE)</label>
+            <input id="stackBbox" type="text" placeholder="19 20 -99.5 -98.5" />
+          </div>
+          <div class="field span-2">
+            <label for="stackNumConn">num_connections</label>
+            <input id="stackNumConn" type="number" min="1" value="1" />
+          </div>
+          <div class="field span-2">
+            <label for="stackRlooks">range looks</label>
+            <input id="stackRlooks" type="number" min="1" value="9" />
+          </div>
+          <div class="field span-2">
+            <label for="stackAlooks">azimuth looks</label>
+            <input id="stackAlooks" type="number" min="1" value="3" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-3">
+            <label for="stackFilt">filter_strength</label>
+            <input id="stackFilt" type="number" step="0.1" value="0.5" />
+          </div>
+          <div class="field span-3">
+            <label for="stackUnw">unw_method</label>
+            <select id="stackUnw">
+              <option value="snaphu">snaphu</option>
+              <option value="icu">icu</option>
+              <option value="snaphu2stage">snaphu2stage</option>
+            </select>
+          </div>
+          <div class="field span-6">
+            <label>选项</label>
+            <div class="checks">
+              <label><input id="stackUseGpu" type="checkbox" checked /> use GPU</label>
+              <label><input id="stackNoFocus" type="checkbox" /> --nofocus（仅 Stripmap）</label>
+              <label><input id="stackZeroDop" type="checkbox" /> -z zerodop（仅 Stripmap）</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="btns">
+          <button class="btn-main" id="btnGenStack">生成 Stack XML 与命令</button>
+          <button class="btn-copy" id="btnCopyStackXml">复制 XML</button>
+          <button class="btn-copy" id="btnCopyStackCmd">复制命令</button>
+          <button class="btn-save" id="btnSaveStackXml">下载 XML</button>
+        </div>
+
+        <div class="split">
+          <div>
+            <label for="stackXmlOut">Stack 参数 XML（记录/复现用）</label>
+            <textarea id="stackXmlOut" readonly></textarea>
+          </div>
+          <div>
+            <label for="stackCmdOut">Stack 命令</label>
+            <textarea id="stackCmdOut" readonly></textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="term-box">
+      <div class="term-head">
+        <h2>远程终端窗口（SSH + WebTerm）</h2>
+        <p>浏览器不能直接原生 SSH。此区域提供 SSH 命令生成、Web 终端嵌入（如 ttyd/wetty）和本地模拟命令窗。</p>
+      </div>
+      <div class="term-body">
+        <div class="row">
+          <div class="field span-2">
+            <label for="termOs">本地系统</label>
+            <select id="termOs">
+              <option value="linux">Linux / macOS</option>
+              <option value="windows">Windows (PowerShell/CMD)</option>
+            </select>
+          </div>
+          <div class="field span-2">
+            <label for="termUser">用户名</label>
+            <input id="termUser" type="text" placeholder="ysdong" />
+          </div>
+          <div class="field span-3">
+            <label for="termHost">服务器地址</label>
+            <input id="termHost" type="text" placeholder="10.10.10.10 或 server.domain" />
+          </div>
+          <div class="field span-1">
+            <label for="termPort">端口</label>
+            <input id="termPort" type="number" min="1" value="22" />
+          </div>
+          <div class="field span-4">
+            <label for="termKey">私钥路径（可选）</label>
+            <input id="termKey" type="text" placeholder="~/.ssh/id_rsa 或 C:\\Users\\me\\.ssh\\id_rsa" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-8">
+            <label for="termExtra">额外 SSH 参数（可选）</label>
+            <input id="termExtra" type="text" placeholder="例如: -o StrictHostKeyChecking=no -L 8888:localhost:8888" />
+          </div>
+          <div class="field span-4">
+            <label for="termWebUrl">WebTerm URL（可选）</label>
+            <input id="termWebUrl" type="url" placeholder="http://server:7681" />
+            <div class="small-note">例如服务器运行: `ttyd -p 7681 bash -l`</div>
+          </div>
+        </div>
+
+        <div class="btns">
+          <button class="btn-main" id="btnGenSsh">生成 SSH 命令</button>
+          <button class="btn-copy" id="btnCopySsh">复制 SSH 命令</button>
+          <button class="btn-copy" id="btnOpenWebTerm">加载 WebTerm</button>
+        </div>
+
+        <div class="row">
+          <div class="field span-12">
+            <label for="sshCmdOut">SSH 命令</label>
+            <textarea id="sshCmdOut" readonly></textarea>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-12">
+            <label for="termFrame">WebTerm 窗口</label>
+            <iframe id="termFrame" title="Remote Web Terminal"></iframe>
+            <div class="warn">若无法显示，通常是服务器未部署 Web 终端服务，或浏览器/反向代理限制了 iframe / 跨域策略。</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field span-12">
+            <label>本地模拟命令窗（仅记录，不会执行命令）</label>
+            <div id="termConsole" class="terminal">ISCE2 Term Ready\n提示：这里是本地模拟窗口，可用于粘贴/记录命令。实际执行请在系统终端里运行。</div>
+            <div class="terminal-input">
+              <div class="prompt">$</div>
+              <input id="termLocalInput" type="text" placeholder="输入命令后回车，仅追加到窗口，不执行" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>ISCE2 XML/CMD Builder · Tab UI + Remote Terminal Helper</footer>
+  </div>
+
+  <script>
+    const GRD_SENSORS = ["SENTINEL1", "RADARSAT2", "TERRASARX"];
+    const TOPS_SENSORS = ["SENTINEL1"];
+    const STRIPMAP_SENSORS = [
+      "ALOS", "ALOS_SLC", "ALOS2", "ALOS4", "CAPELLA", "COSMO_SKYMED", "COSMO_SKYMED_SLC",
+      "ENVISAT", "ENVISAT_SLC", "ERS", "ERS_ENVISAT", "ERS_ENVISAT_SLC", "ERS_SLC",
+      "ICEYE_SLC", "KOMPSAT5", "LUTAN1", "RADARSAT1", "RADARSAT2", "RISAT1", "RISAT1_SLC",
+      "ROI_PAC", "SAOCOM_SLC", "SENTINEL1", "SICD_RGZERO", "TERRASARX", "TIANYI",
+      "UAVSAR_HDF5_SLC", "UAVSAR_POLSAR", "UAVSAR_RPI", "UAVSAR_STACK"
+    ];
+
+    const TOPS_WORKFLOWS = ["slc", "correlation", "interferogram", "offset"];
+    const STRIPMAP_WORKFLOWS = ["slc", "interferogram", "ionosphere"];
+
+    function el(id) { return document.getElementById(id); }
+    function v(id) { return el(id).value.trim(); }
+    function ck(id) { return el(id).checked; }
+
+    function escapeXml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
+    }
+
+    function p(name, value, indent = 4) {
+      if (value === null || value === undefined || String(value).trim() === "") return "";
+      return `${" ".repeat(indent)}<property name="${escapeXml(name)}">${escapeXml(String(value))}</property>`;
+    }
+
+    function pb(name, flag, indent = 4) {
+      return `${" ".repeat(indent)}<property name="${escapeXml(name)}">${flag ? "True" : "False"}</property>`;
+    }
+
+    function component(name, lines, indent = 4) {
+      const body = lines.filter(Boolean).join("\n");
+      if (!body) return "";
+      const sp = " ".repeat(indent);
+      return `${sp}<component name="${escapeXml(name)}">\n${body}\n${sp}</component>`;
+    }
+
+    function joinLines(lines) { return lines.filter(Boolean).join("\n"); }
+
+    function parseSteps(stepsValue) {
+      const s = (stepsValue || "").trim();
+      if (!s) return { start: "", end: "" };
+      const parts = s.split(":");
+      return {
+        start: (parts[0] || "").trim(),
+        end: (parts[1] || "").trim()
+      };
+    }
+
+    function fillSelect(selectId, items) {
+      const sel = el(selectId);
+      const old = sel.value;
+      sel.innerHTML = "";
+      items.forEach((item) => {
+        const opt = document.createElement("option");
+        opt.value = item;
+        opt.textContent = item;
+        sel.appendChild(opt);
+      });
+      if (items.includes(old)) sel.value = old;
+    }
+
+    function initTabs() {
+      const btns = Array.from(document.querySelectorAll(".tab-btn"));
+      btns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          btns.forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          const tab = btn.getAttribute("data-tab");
+          Array.from(document.querySelectorAll(".tab-panel")).forEach((p) => {
+            p.classList.toggle("active", p.id === tab);
+          });
+        });
+      });
+    }
+
+    function initSensorLists() {
+      fillSelect("grdSensor", GRD_SENSORS);
+      updateInsarSensors();
+      updateStackMode();
+    }
+
+    function updateInsarSensors() {
+      const mode = v("insarMode");
+      fillSelect("insarSensor", mode === "tops" ? TOPS_SENSORS : STRIPMAP_SENSORS);
+    }
+
+    function updateInsarSplitUI() {
+      const split = ck("insarSplitCatalog");
+      el("insarSplitNamesRow").style.display = split ? "grid" : "none";
+      el("insarSplitOutputs").style.display = split ? "grid" : "none";
+      el("btnCopyRefXml").style.display = split ? "inline-block" : "none";
+      el("btnCopySecXml").style.display = split ? "inline-block" : "none";
+      el("btnSaveRefXml").style.display = split ? "inline-block" : "none";
+      el("btnSaveSecXml").style.display = split ? "inline-block" : "none";
+    }
+
+    function updateStackMode() {
+      const mode = v("stackMode");
+      const sensorSel = el("stackSensor");
+      const wfSel = el("stackWorkflow");
+      sensorSel.innerHTML = "";
+      wfSel.innerHTML = "";
+
+      if (mode === "tops") {
+        fillSelect("stackSensor", ["SENTINEL1"]);
+        el("stackSensor").disabled = true;
+        TOPS_WORKFLOWS.forEach((w) => {
+          const o = document.createElement("option");
+          o.value = w;
+          o.textContent = w;
+          wfSel.appendChild(o);
+        });
+        el("stackTopsExtraRow").style.display = "grid";
+      } else {
+        fillSelect("stackSensor", STRIPMAP_SENSORS);
+        el("stackSensor").disabled = false;
+        STRIPMAP_WORKFLOWS.forEach((w) => {
+          const o = document.createElement("option");
+          o.value = w;
+          o.textContent = w;
+          wfSel.appendChild(o);
+        });
+        el("stackTopsExtraRow").style.display = "none";
+      }
+    }
+
+    function generateGrd() {
+      const sensor = v("grdSensor");
+      const xmlName = v("grdXmlName") || "rtcApp.xml";
+      const { start, end } = parseSteps(v("grdSteps"));
+
+      const refLines = [
+        p("safe", v("grdInput"), 6),
+        p("output directory", v("grdRefOut"), 6),
+        p("orbit directory", v("grdOrbitDir"), 6),
+        p("auxiliary data directory", v("grdAuxDir"), 6)
+      ];
+
+      const appLines = [
+        p("sensor name", sensor),
+        p("demFilename", v("grdDem")),
+        p("range looks", v("grdRlooks")),
+        p("azimuth looks", v("grdAlooks")),
+        p("posting", v("grdPosting")),
+        p("epsg id", v("grdEpsg")),
+        p("gspacing", v("grdGspacing")),
+        p("polarizations", v("grdPolarizations")),
+        p("geocode bounding box", v("grdBbox")),
+        pb("useHighResolutionDemOnly", ck("grdUseHighResDem")),
+        pb("apply water mask", ck("grdApplyWater")),
+        pb("apply thermal noise correction", ck("grdApplyThermal")),
+        component("reference", refLines)
+      ];
+
+      const xml = joinLines([
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<rtcApp>',
+        '  <component name="grdsar">',
+        appLines.filter(Boolean).join("\n"),
+        '  </component>',
+        '</rtcApp>'
+      ]);
+
+      const args = [];
+      if (start) args.push(`--start=${start}`);
+      if (end) args.push(`--end=${end}`);
+      const cmd = joinLines([
+        `cd ${v("grdWorkDir") || "."}`,
+        `rtcApp.py ${xmlName}${args.length ? " " + args.join(" ") : ""}`
+      ]);
+
+      el("grdXmlOut").value = xml;
+      el("grdCmdOut").value = cmd;
+    }
+
+    function refSecForInsar(mode, input, outDir, orbitDir, auxDir) {
+      if (mode === "tops") {
+        return [
+          p("safe", input, 6),
+          p("output directory", outDir, 6),
+          p("orbit directory", orbitDir, 6),
+          p("auxiliary data directory", auxDir, 6)
+        ];
+      }
+      const lower = String(input || "").toLowerCase();
+      const key = (lower.endsWith(".xml") || lower.endsWith(".meta.xml")) ? "xml" : "safe";
+      return [
+        p(key, input, 6),
+        p("output directory", outDir, 6)
+      ];
+    }
+
+    function generateInsar() {
+      const mode = v("insarMode");
+      const sensor = v("insarSensor");
+      const xmlName = v("insarXmlName") || "insarApp.xml";
+      const { start, end } = parseSteps(v("insarSteps"));
+      const splitCatalog = ck("insarSplitCatalog");
+      const refXmlName = v("insarRefXmlName") || "reference.xml";
+      const secXmlName = v("insarSecXmlName") || "secondary.xml";
+
+      const root = mode === "tops" ? "topsApp" : "stripmapApp";
+      const compName = mode === "tops" ? "topsinsar" : "insar";
+      const app = mode === "tops" ? "topsApp.py" : "stripmapApp.py";
+
+      const refLines = refSecForInsar(mode, v("insarRefInput"), v("insarRefOut"), v("insarOrbitDir"), v("insarAuxDir"));
+      const secLines = refSecForInsar(mode, v("insarSecInput"), v("insarSecOut"), v("insarOrbitDir"), v("insarAuxDir"));
+
+      const appLines = [
+        p("sensor name", sensor),
+        p("demFilename", v("insarDem")),
+        p("range looks", v("insarRlooks")),
+        p("azimuth looks", v("insarAlooks")),
+        p("geocode bounding box", v("insarBbox")),
+        p("region of interest", v("insarRoi")),
+        pb("do unwrap", ck("insarDoUnwrap")),
+        p("unwrapper name", v("insarUnwrapper")),
+        pb("use GPU", ck("insarUseGPU")),
+        mode === "stripmap" ? p("rangeCropFarPixels", v("insarRangeCropFar")) : "",
+        splitCatalog
+          ? `    <component name="reference">\n      <catalog>${escapeXml(refXmlName)}</catalog>\n    </component>`
+          : component("reference", refLines),
+        splitCatalog
+          ? `    <component name="secondary">\n      <catalog>${escapeXml(secXmlName)}</catalog>\n    </component>`
+          : component("secondary", secLines)
+      ];
+
+      const xml = joinLines([
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        `<${root}>`,
+        `  <component name="${compName}">`,
+        appLines.filter(Boolean).join("\n"),
+        '  </component>',
+        `</${root}>`
+      ]);
+
+      const args = [];
+      if (start) args.push(`--start=${start}`);
+      if (end) args.push(`--end=${end}`);
+      const cmd = joinLines([
+        `cd ${v("insarWorkDir") || "."}`,
+        `${app} ${xmlName}${args.length ? " " + args.join(" ") : ""}`
+      ]);
+
+      el("insarXmlOut").value = xml;
+      el("insarCmdOut").value = cmd;
+
+      if (splitCatalog) {
+        const refXml = joinLines([
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<component name="reference">',
+          refLines.filter(Boolean).join("\n"),
+          '</component>'
+        ]);
+        const secXml = joinLines([
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<component name="secondary">',
+          secLines.filter(Boolean).join("\n"),
+          '</component>'
+        ]);
+        el("insarRefXmlOut").value = refXml;
+        el("insarSecXmlOut").value = secXml;
+      } else {
+        el("insarRefXmlOut").value = "";
+        el("insarSecXmlOut").value = "";
+      }
+    }
+
+    function generateStack() {
+      const mode = v("stackMode");
+      const xmlName = v("stackXmlName") || "stackConfig.xml";
+
+      const xml = joinLines([
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<stackConfig>',
+        p("mode", mode, 2),
+        p("sensor name", v("stackSensor"), 2),
+        p("workflow", v("stackWorkflow"), 2),
+        p("slc_directory", v("stackSlcDir"), 2),
+        p("working_directory", v("stackWorkDir"), 2),
+        p("dem", v("stackDem"), 2),
+        p("orbit_directory", v("stackOrbitDir"), 2),
+        p("aux_directory", v("stackAuxDir"), 2),
+        p("polarization", v("stackPolarization"), 2),
+        p("reference_date", v("stackRefDate"), 2),
+        p("bbox", v("stackBbox"), 2),
+        p("num_connections", v("stackNumConn"), 2),
+        p("range_looks", v("stackRlooks"), 2),
+        p("azimuth_looks", v("stackAlooks"), 2),
+        p("filter_strength", v("stackFilt"), 2),
+        p("unw_method", v("stackUnw"), 2),
+        pb("useGPU", ck("stackUseGpu"), 2),
+        pb("nofocus", ck("stackNoFocus"), 2),
+        pb("zerodop", ck("stackZeroDop"), 2),
+        '</stackConfig>'
+      ].filter(Boolean));
+
+      let cmd = "";
+      if (mode === "tops") {
+        const args = [
+          `-s ${v("stackSlcDir")}`,
+          `-o ${v("stackOrbitDir")}`,
+          `-a ${v("stackAuxDir")}`,
+          `-d ${v("stackDem")}`,
+          `-w ${v("stackWorkDir") || "./"}`,
+          `-W ${v("stackWorkflow")}`,
+          `-p ${v("stackPolarization") || "vv"}`,
+          `-c ${v("stackNumConn")}`,
+          `-r ${v("stackRlooks")}`,
+          `-z ${v("stackAlooks")}`,
+          `-f ${v("stackFilt")}`,
+          `-u ${v("stackUnw")}`
+        ];
+        if (v("stackRefDate")) args.push(`-m ${v("stackRefDate")}`);
+        if (v("stackBbox")) args.push(`-b "${v("stackBbox")}"`);
+        args.push(ck("stackUseGpu") ? "-useGPU" : "-noGPU");
+        cmd = `stackSentinel.py ${args.join(" ")}`;
+      } else {
+        const args = [
+          `-s ${v("stackSlcDir")}`,
+          `-d ${v("stackDem")}`,
+          `-w ${v("stackWorkDir") || "./"}`,
+          `-W ${v("stackWorkflow")}`,
+          `-r ${v("stackRlooks")}`,
+          `-a ${v("stackAlooks")}`,
+          `-f ${v("stackFilt")}`,
+          `-u ${v("stackUnw")}`,
+          `-S ${v("stackSensor")}`
+        ];
+        if (v("stackRefDate")) args.push(`-m ${v("stackRefDate")}`);
+        if (v("stackBbox")) args.push(`-x "${v("stackBbox")}"`);
+        if (ck("stackNoFocus")) args.push("--nofocus");
+        if (ck("stackZeroDop")) args.push("-z");
+        args.push(ck("stackUseGpu") ? "-useGPU" : "-noGPU");
+        cmd = `stackStripMap.py ${args.join(" ")}`;
+      }
+
+      el("stackXmlOut").value = xml;
+      el("stackCmdOut").value = joinLines([
+        `# 参数记录文件: ${xmlName}`,
+        cmd
+      ]);
+    }
+
+    async function copyText(text) {
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (_) {
+        // no-op
+      }
+    }
+
+    function saveText(filename, text) {
+      const blob = new Blob([text], { type: "application/xml;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename || "output.xml";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    }
+
+    function generateSshCommand() {
+      const os = v("termOs");
+      const user = v("termUser");
+      const host = v("termHost");
+      const port = v("termPort") || "22";
+      const key = v("termKey");
+      const extra = v("termExtra");
+
+      const target = user ? `${user}@${host}` : host;
+      let cmd = "ssh";
+      if (key) cmd += ` -i "${key}"`;
+      if (port && port !== "22") cmd += ` -p ${port}`;
+      if (extra) cmd += ` ${extra}`;
+      cmd += ` ${target}`;
+
+      if (os === "windows") {
+        cmd = `# Windows PowerShell/CMD\n${cmd}`;
+      } else {
+        cmd = `# Linux/macOS\n${cmd}`;
+      }
+
+      el("sshCmdOut").value = cmd;
+      appendTerm(`Generated SSH command for ${target || "(empty target)"}`);
+    }
+
+    function openWebTerm() {
+      const url = v("termWebUrl");
+      if (!url) return;
+      el("termFrame").src = url;
+      appendTerm(`WebTerm loaded: ${url}`);
+    }
+
+    function appendTerm(text) {
+      const box = el("termConsole");
+      box.textContent += `\n${text}`;
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function bindUI() {
+      el("insarMode").addEventListener("change", updateInsarSensors);
+      el("insarSplitCatalog").addEventListener("change", () => {
+        updateInsarSplitUI();
+        generateInsar();
+      });
+      el("stackMode").addEventListener("change", updateStackMode);
+
+      el("btnGenGrd").addEventListener("click", generateGrd);
+      el("btnGenInsar").addEventListener("click", generateInsar);
+      el("btnGenStack").addEventListener("click", generateStack);
+
+      el("btnCopyGrdXml").addEventListener("click", () => copyText(v("grdXmlOut")));
+      el("btnCopyGrdCmd").addEventListener("click", () => copyText(v("grdCmdOut")));
+      el("btnCopyInsarXml").addEventListener("click", () => copyText(v("insarXmlOut")));
+      el("btnCopyInsarCmd").addEventListener("click", () => copyText(v("insarCmdOut")));
+      el("btnCopyRefXml").addEventListener("click", () => copyText(v("insarRefXmlOut")));
+      el("btnCopySecXml").addEventListener("click", () => copyText(v("insarSecXmlOut")));
+      el("btnCopyStackXml").addEventListener("click", () => copyText(v("stackXmlOut")));
+      el("btnCopyStackCmd").addEventListener("click", () => copyText(v("stackCmdOut")));
+
+      el("btnSaveGrdXml").addEventListener("click", () => saveText(v("grdXmlName") || "rtcApp.xml", v("grdXmlOut")));
+      el("btnSaveInsarXml").addEventListener("click", () => saveText(v("insarXmlName") || "insarApp.xml", v("insarXmlOut")));
+      el("btnSaveRefXml").addEventListener("click", () => saveText(v("insarRefXmlName") || "reference.xml", v("insarRefXmlOut")));
+      el("btnSaveSecXml").addEventListener("click", () => saveText(v("insarSecXmlName") || "secondary.xml", v("insarSecXmlOut")));
+      el("btnSaveStackXml").addEventListener("click", () => saveText(v("stackXmlName") || "stackConfig.xml", v("stackXmlOut")));
+
+      el("btnGenSsh").addEventListener("click", generateSshCommand);
+      el("btnCopySsh").addEventListener("click", () => copyText(v("sshCmdOut")));
+      el("btnOpenWebTerm").addEventListener("click", openWebTerm);
+
+      el("termLocalInput").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        const cmd = e.target.value.trim();
+        if (cmd) {
+          appendTerm(`$ ${cmd}`);
+          appendTerm("(local mock) command recorded, not executed.");
+        }
+        e.target.value = "";
+      });
+    }
+
+    initTabs();
+    initSensorLists();
+    updateInsarSplitUI();
+    bindUI();
+    generateGrd();
+    generateInsar();
+    generateStack();
+    generateSshCommand();
+  </script>
+</body>
+</html>
