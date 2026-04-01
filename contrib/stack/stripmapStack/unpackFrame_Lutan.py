@@ -30,6 +30,10 @@ def cmdLineParse():
         '--orbit-file', dest='orbitfile', type=str, default=None,
         help='Optional external orbit file'
     )
+    parser.add_argument(
+        '--crop-far', dest='crop_far', type=int, default=0,
+        help='Crop N pixels from far-range edge (default: 0)'
+    )
 
     return parser.parse_args()
 
@@ -89,17 +93,18 @@ def resolve_tiff_input(inp):
     raise RuntimeError('Input path does not exist: {}'.format(inp))
 
 
-def _build_sensor(tiff_path, orbitfile=None):
+def _build_sensor(tiff_path, orbitfile=None, crop_far=0):
     obj = createSensor('LUTAN1')
     obj.configure()
     obj.tiff = tiff_path
+    obj.rangeCropFarPixels = max(0, int(crop_far))
     if orbitfile:
         obj.orbitFile = orbitfile
     return obj
 
 
-def _acquisition_date_yyyymmdd(tiff_path, orbitfile=None):
-    probe = _build_sensor(tiff_path, orbitfile=orbitfile)
+def _acquisition_date_yyyymmdd(tiff_path, orbitfile=None, crop_far=0):
+    probe = _build_sensor(tiff_path, orbitfile=orbitfile, crop_far=crop_far)
     probe.parse()
     tstart = probe.frame.getSensingStart()
     if tstart is None:
@@ -107,7 +112,7 @@ def _acquisition_date_yyyymmdd(tiff_path, orbitfile=None):
     return tstart.strftime('%Y%m%d')
 
 
-def unpack(inp, slcdir, orbitfile=None):
+def unpack(inp, slcdir, orbitfile=None, crop_far=0):
     '''
     Unpack Lutan data to binary SLC file.
     Output SLC filename uses acquisition date: YYYYMMDD.slc
@@ -115,10 +120,10 @@ def unpack(inp, slcdir, orbitfile=None):
 
     os.makedirs(slcdir, exist_ok=True)
     tiff_path = resolve_tiff_input(inp)
-    acq_date = _acquisition_date_yyyymmdd(tiff_path, orbitfile=orbitfile)
+    acq_date = _acquisition_date_yyyymmdd(tiff_path, orbitfile=orbitfile, crop_far=crop_far)
     slc_path = os.path.join(slcdir, acq_date + '.slc')
 
-    obj = _build_sensor(tiff_path, orbitfile=orbitfile)
+    obj = _build_sensor(tiff_path, orbitfile=orbitfile, crop_far=crop_far)
     obj.output = slc_path
     obj.extractImage()
     obj.frame.getImage().renderHdr()
@@ -140,4 +145,4 @@ if __name__ == '__main__':
     inps = cmdLineParse()
     inps.input = inps.input.rstrip('/')
     inps.slcdir = inps.slcdir.rstrip('/')
-    unpack(inps.input, inps.slcdir, orbitfile=inps.orbitfile)
+    unpack(inps.input, inps.slcdir, orbitfile=inps.orbitfile, crop_far=inps.crop_far)

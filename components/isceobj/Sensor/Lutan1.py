@@ -54,6 +54,15 @@ ORBIT_FILE = Component.Parameter('orbitFile',
                             type=str,
                             doc = 'Orbit file')
 
+RANGE_CROP_FAR_PIXELS = Component.Parameter(
+    'rangeCropFarPixels',
+    public_name='rangeCropFarPixels',
+    default=0,
+    type=int,
+    mandatory=False,
+    doc='Crop N pixels from far-range edge after import (default: 0).'
+)
+
 SAFE = Component.Parameter(
     'safe',
     public_name='safe',
@@ -127,6 +136,7 @@ class Lutan1(Sensor):
     parameter_list = (
         SAFE,
         TIFF,
+        RANGE_CROP_FAR_PIXELS,
         ORBIT_FILE,
         ORBIT_FILTER,
         ORBIT_FILTER_DEGREE,
@@ -487,6 +497,17 @@ class Lutan1(Sensor):
         prf = float(self.grab_from_xml('instrument/settings/settingRecord/PRF'))
         lines = int(self.grab_from_xml('productInfo/imageDataInfo/imageRaster/numberOfRows'))
         samples = int(self.grab_from_xml('productInfo/imageDataInfo/imageRaster/numberOfColumns'))
+
+        crop_far = max(0, int(self.rangeCropFarPixels))
+        if crop_far >= samples:
+            raise Exception(
+                'rangeCropFarPixels ({}) must be smaller than numberOfColumns ({}).'.format(
+                    crop_far, samples
+                )
+            )
+        if crop_far > 0:
+            samples = samples - crop_far
+            print('Lutan1: cropping far-range by {} pixels, effective samples={}'.format(crop_far, samples))
 
         startingRange = float(self.grab_from_xml('productInfo/sceneInfo/rangeTime/firstPixel'))*Const.c/2.0
         #slantRange = float(self.grab_from_xml('productSpecific/complexImageInfo/'))
