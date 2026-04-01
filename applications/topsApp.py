@@ -35,6 +35,7 @@
 
 import time
 import sys
+import os
 from isce import logging
 
 import isce
@@ -54,6 +55,24 @@ except ImportError:
         from postprocess_hook import run_auto_postprocess
 
 logger = logging.getLogger('isce.insar')
+
+
+def _ensure_postprocess_utm_args(post_args):
+    extras = []
+    current = str(post_args or "")
+
+    if "--to-utm" not in current:
+        extras.append("--to-utm")
+    if "--utm-res-mode" not in current:
+        extras.extend(["--utm-res-mode", "multilook"])
+    if "--square-pixel" not in current:
+        extras.append("--square-pixel")
+
+    if not extras:
+        return current
+    if current:
+        return (current + " " + " ".join(extras)).strip()
+    return " ".join(extras)
 
 
 SENSOR_NAME = Application.Parameter(
@@ -858,7 +877,20 @@ class TopsInSAR(Application):
         self._insar.timeStart = time.time()
 
     def endup(self):
-        run_auto_postprocess(logger, 'topsApp')
+        saved_post_args = os.environ.get("ISCE_AUTO_POSTPROCESS_ARGS")
+        injected_args = False
+        try:
+            post_args = os.environ.get("ISCE_AUTO_POSTPROCESS_ARGS", "")
+            post_args = _ensure_postprocess_utm_args(post_args)
+            os.environ["ISCE_AUTO_POSTPROCESS_ARGS"] = post_args
+            injected_args = True
+            run_auto_postprocess(logger, 'topsApp')
+        finally:
+            if injected_args:
+                if saved_post_args is None:
+                    os.environ.pop("ISCE_AUTO_POSTPROCESS_ARGS", None)
+                else:
+                    os.environ["ISCE_AUTO_POSTPROCESS_ARGS"] = saved_post_args
         self.renderProcDoc()
         self._insar.timeEnd = time.time()
         if hasattr(self._insar, 'timeStart'):

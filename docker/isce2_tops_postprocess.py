@@ -706,11 +706,13 @@ def geotiff_to_kmz(src_tif, dst_kmz):
 
 
 def integerize_resolution(xres, yres, square=False):
-    xr = max(1, int(round(float(xres))))
-    yr = max(1, int(round(float(yres))))
     if square:
-        v = max(xr, yr)
-        xr, yr = v, v
+        v = max(float(xres), float(yres))
+        iv = max(1, int(math.ceil(v)))
+        xr, yr = iv, iv
+    else:
+        xr = max(1, int(round(float(xres))))
+        yr = max(1, int(round(float(yres))))
     return xr, yr
 
 

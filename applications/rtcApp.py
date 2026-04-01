@@ -118,9 +118,9 @@ EPSG = Application.Parameter(
 
 GSPACING = Application.Parameter('gspacing',
             public_name='geocode spacing',
-            default = 100.0,
+            default = None,
             type = float,
-            doc = 'Desired grid spacing of geocoded product in meters, in the specified UTM grid.'
+            doc = 'Desired grid spacing of geocoded product in meters. If not set, auto use ceil(max(multilook x/y resolution)) with square pixels.'
                                     ) 
 
 INTMETHOD = Application.Parameter('intmethod',

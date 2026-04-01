@@ -122,6 +122,24 @@ def _autodetect_wavelength_for_postprocess(insar_obj):
     return None
 
 
+def _ensure_postprocess_utm_args(post_args):
+    extras = []
+    current = str(post_args or "")
+
+    if "--to-utm" not in current:
+        extras.append("--to-utm")
+    if "--utm-res-mode" not in current:
+        extras.extend(["--utm-res-mode", "multilook"])
+    if "--square-pixel" not in current:
+        extras.append("--square-pixel")
+
+    if not extras:
+        return current
+    if current:
+        return (current + " " + " ".join(extras)).strip()
+    return " ".join(extras)
+
+
 SENSOR_NAME = Application.Parameter(
         'sensorName',
         public_name='sensor name',
@@ -848,16 +866,18 @@ class _RoiBase(Application, FrameMixin):
         try:
             auto_wvl = _autodetect_wavelength_for_postprocess(self._insar)
             post_args = os.environ.get("ISCE_AUTO_POSTPROCESS_ARGS", "")
+            post_args = _ensure_postprocess_utm_args(post_args)
             if (auto_wvl is not None) and ("--wavelength" not in post_args):
                 extra = "--wavelength {0:.12g}".format(auto_wvl)
                 merged = (post_args + " " + extra).strip() if post_args else extra
-                os.environ["ISCE_AUTO_POSTPROCESS_ARGS"] = merged
-                injected_args = True
+                post_args = merged
                 logger.info(
                     "Auto postprocess stripmap wavelength override enabled: %.12g m",
                     auto_wvl,
                 )
 
+            os.environ["ISCE_AUTO_POSTPROCESS_ARGS"] = post_args
+            injected_args = True
             run_auto_postprocess(logger, 'stripmapApp')
         finally:
             if injected_args:
