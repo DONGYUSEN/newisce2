@@ -29,6 +29,9 @@ _DEFAULT_CONFIG = {
     'coarse_auto_efficiency_balance': True,
     'coarse_quality_margin_for_smaller_window': 0.03,
     'coarse_spread_margin_for_smaller_window': 2.0,
+    'fine_large_coarse_threshold': 1024,
+    'fine_window_cap_for_large_coarse': 1024,
+    'fine_large_coarse_grid_size': 60,
     'fine_window': 128,
     'fine_spacing': 128,
     'fine_quality_threshold': 0.05,
@@ -588,6 +591,21 @@ def _iter_grid_points(height, width, spacing, margin):
         r += int(spacing)
 
 
+def _iter_uniform_grid_points(height, width, margin, rows_count, cols_count):
+    r0 = float(margin)
+    c0 = float(margin)
+    r1 = float(height - int(margin) - 1)
+    c1 = float(width - int(margin) - 1)
+    if (r1 <= r0) or (c1 <= c0):
+        return []
+
+    nr = max(1, int(rows_count))
+    nc = max(1, int(cols_count))
+    rows = np.linspace(r0, r1, nr, dtype=np.float64)
+    cols = np.linspace(c0, c1, nc, dtype=np.float64)
+    return [(float(r), float(c)) for r in rows for c in cols]
+
+
 def _evaluate_fine_point(master_amp, slave_amp, row, col, coarse_az, coarse_rg, window, quality_threshold):
     pm = master_amp.extract_patch(row, col, window)
     ps = slave_amp.extract_patch(row + coarse_az, col + coarse_rg, window)
@@ -611,11 +629,31 @@ def _evaluate_fine_point(master_amp, slave_amp, row, col, coarse_az, coarse_rg, 
     }
 
 
-def _fine_registration(master_amp, slave_amp, coarse_az, coarse_rg, cfg, logger=None):
+def _fine_registration(master_amp, slave_amp, coarse_az, coarse_rg, cfg, coarse_window=None, logger=None):
     h, w = master_amp.shape
-    window = int(cfg['fine_window'])
+
+    requested_window = int(cfg['fine_window'])
+    if coarse_window is not None:
+        try:
+            requested_window = int(np.rint(float(coarse_window)))
+        except Exception:
+            requested_window = int(cfg['fine_window'])
+
+    if requested_window <= 0:
+        requested_window = int(cfg['fine_window'])
+
+    window = int(requested_window)
     if window % 2 != 0:
         window += 1
+
+    large_threshold = max(32, int(cfg.get('fine_large_coarse_threshold', 1024)))
+    window_cap = max(32, int(cfg.get('fine_window_cap_for_large_coarse', 1024)))
+    fixed_grid_size = max(3, int(cfg.get('fine_large_coarse_grid_size', 60)))
+    use_fixed_grid = (requested_window > large_threshold)
+    if use_fixed_grid:
+        window = min(window, window_cap)
+        if window % 2 != 0:
+            window -= 1
 
     spacing = max(16, int(cfg['fine_spacing']))
     margin = (window // 2) + max(abs(int(np.rint(coarse_az))), abs(int(np.rint(coarse_rg)))) + 2
@@ -629,9 +667,28 @@ def _fine_registration(master_amp, slave_amp, coarse_az, coarse_rg, cfg, logger=
     else:
         workers = max(1, workers_cfg)
 
-    grid_points = list(_iter_grid_points(h, w, spacing, margin))
+    if use_fixed_grid:
+        grid_points = _iter_uniform_grid_points(h, w, margin, fixed_grid_size, fixed_grid_size)
+        grid_mode = 'fixed_{0}x{0}'.format(fixed_grid_size)
+    else:
+        grid_points = list(_iter_grid_points(h, w, spacing, margin))
+        grid_mode = 'spacing_{0}'.format(spacing)
+
+    if not grid_points:
+        raise RuntimeError(
+            'Integrated external fine registration failed: no candidate points '
+            '(window={0}, margin={1}, image={2}x{3})'.format(window, margin, h, w)
+        )
+
     points = []
 
+    if logger is not None:
+        logger.info(
+            'External fine registration config bridged from coarse: coarse_window=%d effective_fine_window=%d grid_mode=%s',
+            int(requested_window),
+            int(window),
+            grid_mode,
+        )
     if (logger is not None) and (workers > 1):
         logger.info(
             'External fine registration parallel mode: workers=%d, chunk_size=%d, candidate_points=%d',
@@ -864,6 +921,7 @@ def estimate_misregistration_polys(
         coarse_az=coarse['azimuth_offset'],
         coarse_rg=coarse['range_offset'],
         cfg=cfg,
+        coarse_window=coarse.get('window_size'),
         logger=logger,
     )
     model = _fit_model(points, cfg)
