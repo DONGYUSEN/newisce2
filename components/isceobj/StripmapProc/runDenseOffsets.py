@@ -5,9 +5,16 @@ import isce
 import isceobj
 from mroipac.ampcor.DenseAmpcor import DenseAmpcor
 from isceobj.Util.decorators import use_api
+from isceobj.StripmapProc.externalRegistration import (
+    _read_slc_as_memmap,
+    _AmplitudeAccessor,
+    _phase_correlation_displacement,
+)
 import os
 import logging
 import math
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger('isce.insar.runDenseOffsets')
 
@@ -75,6 +82,15 @@ def _resolve_dense_threads():
 
 
 def _compute_dense_layout(width, length, ww, wh, sw, shh, kw, kh, margin):
+    grid = _dense_grid_definition(width, length, ww, wh, sw, shh, kw, kh, margin)
+    return {
+        'num_across': int(len(grid['grid_across'])),
+        'num_down': int(len(grid['grid_down'])),
+        'num_windows': int(len(grid['grid_across']) * len(grid['grid_down'])),
+    }
+
+
+def _dense_grid_definition(width, length, ww, wh, sw, shh, kw, kh, margin):
     if kw <= 0 or kh <= 0:
         raise ValueError('Dense skip must be positive: skip=(%d,%d)' % (kw, kh))
 
@@ -107,15 +123,203 @@ def _compute_dense_layout(width, length, ww, wh, sw, shh, kw, kh, margin):
 
     gridLocAcross = range(offAc + pixLocOffAc, lastAc - pixLocOffAc, kw)
     gridLocDown = range(offDn + pixLocOffDn, lastDn - pixLocOffDn, kh)
-
-    numAcross = len(gridLocAcross)
-    numDown = len(gridLocDown)
-    numWindows = int(numAcross * numDown)
     return {
-        'num_across': int(numAcross),
-        'num_down': int(numDown),
-        'num_windows': numWindows,
+        'grid_across': list(gridLocAcross),
+        'grid_down': list(gridLocDown),
     }
+
+
+def _render_dense_output_headers(base, num_across, num_down):
+    out_img = isceobj.createImage()
+    out_img.setDataType('FLOAT')
+    out_img.setFilename(base + '.bil')
+    out_img.setBands(2)
+    out_img.scheme = 'BIL'
+    out_img.setWidth(int(num_across))
+    out_img.setLength(int(num_down))
+    out_img.setAccessMode('read')
+    out_img.renderHdr()
+
+    snr_img = isceobj.createImage()
+    snr_img.setFilename(base + '_snr.bil')
+    snr_img.setDataType('FLOAT')
+    snr_img.setBands(1)
+    snr_img.setWidth(int(num_across))
+    snr_img.setLength(int(num_down))
+    snr_img.setAccessMode('read')
+    snr_img.renderHdr()
+
+    cov_img = isceobj.createImage()
+    cov_img.setDataType('FLOAT')
+    cov_img.setFilename(base + '_cov.bil')
+    cov_img.setBands(3)
+    cov_img.scheme = 'BIL'
+    cov_img.setWidth(int(num_across))
+    cov_img.setLength(int(num_down))
+    cov_img.setAccessMode('read')
+    cov_img.renderHdr()
+
+
+@use_api
+def estimateOffsetFieldExternal(reference, secondary, denseOffsetFileName,
+                                ww=64, wh=64,
+                                sw=20, shh=20,
+                                kw=32, kh=32,
+                                threads=None):
+    '''
+    Estimate dense offsets with integrated external phase-correlation logic on CPU.
+    Falls back to DenseAmpcor at caller level when this path fails.
+    '''
+    precompute_amp = _safe_bool_env('ISCE_DENSE_EXTERNAL_PRECOMPUTE_AMP', False)
+    quality_threshold = _safe_float_env('ISCE_DENSE_EXTERNAL_QUALITY_THRESHOLD', 0.20)
+    min_valid = max(1, _safe_int_env('ISCE_DENSE_EXTERNAL_MIN_VALID', 100))
+
+    workers_cfg = _safe_int_env('ISCE_DENSE_EXTERNAL_WORKERS', 0)
+    if workers_cfg > 0:
+        workers = max(1, workers_cfg)
+    elif threads is not None:
+        workers = max(1, min(int(threads), 8))
+    else:
+        workers = max(1, min(int(os.cpu_count() or 1), 8))
+
+    margin = max(50, int(max(ww, wh) + 2 * max(sw, shh)))
+
+    master = _read_slc_as_memmap(reference)
+    slave = _read_slc_as_memmap(secondary)
+    if master.shape != slave.shape:
+        h = min(master.shape[0], slave.shape[0])
+        w = min(master.shape[1], slave.shape[1])
+        master = master[:h, :w]
+        slave = slave[:h, :w]
+        logger.warning(
+            'External dense offsets cropped mismatched SLC sizes to %dx%d',
+            h,
+            w,
+        )
+
+    master_amp = _AmplitudeAccessor(
+        master,
+        precompute=precompute_amp,
+        logger=logger,
+        label='dense_reference',
+    )
+    slave_amp = _AmplitudeAccessor(
+        slave,
+        precompute=precompute_amp,
+        logger=logger,
+        label='dense_secondary',
+    )
+    h, w = master_amp.shape
+
+    grid = _dense_grid_definition(w, h, ww, wh, sw, shh, kw, kh, margin)
+    grid_across = grid['grid_across']
+    grid_down = grid['grid_down']
+    num_across = int(len(grid_across))
+    num_down = int(len(grid_down))
+    if num_across <= 0 or num_down <= 0:
+        raise RuntimeError(
+            'External dense offsets invalid grid: num_down={0}, num_across={1}'.format(
+                num_down, num_across
+            )
+        )
+
+    logger.info(
+        'External dense offsets config: window=(%d,%d), search=(%d,%d), skip=(%d,%d), '
+        'margin=%d, workers=%d, quality_threshold=%.3f, grid=(%d,%d)',
+        int(ww), int(wh), int(sw), int(shh), int(kw), int(kh),
+        int(margin), int(workers), float(quality_threshold), num_down, num_across
+    )
+
+    az_off = np.full((num_down, num_across), -10000.0, dtype=np.float32)
+    rg_off = np.full((num_down, num_across), -10000.0, dtype=np.float32)
+    snr = np.zeros((num_down, num_across), dtype=np.float32)
+    cov1 = np.full((num_down, num_across), 999.0, dtype=np.float32)
+    cov2 = np.full((num_down, num_across), 999.0, dtype=np.float32)
+    cov3 = np.full((num_down, num_across), 999.0, dtype=np.float32)
+
+    def _evaluate_point(row, col):
+        pm = master_amp.extract_patch(row, col, ww)
+        ps = slave_amp.extract_patch(row, col, ww)
+        if (pm is None) or (ps is None):
+            return None
+        result = _phase_correlation_displacement(pm, ps)
+        if result is None:
+            return None
+        daz, drg, q = result
+        if q < quality_threshold:
+            return None
+        if (abs(float(daz)) > float(shh)) or (abs(float(drg)) > float(sw)):
+            return None
+        return float(daz), float(drg), float(q)
+
+    valid_count = 0
+    if workers <= 1:
+        for i, row in enumerate(grid_down):
+            for j, col in enumerate(grid_across):
+                one = _evaluate_point(row, col)
+                if one is None:
+                    continue
+                valid_count += 1
+                daz, drg, q = one
+                az_off[i, j] = daz
+                rg_off[i, j] = drg
+                snr[i, j] = q
+                cval = max(0.0, 1.0 - q)
+                cov1[i, j] = cval
+                cov2[i, j] = cval
+                cov3[i, j] = cval
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for i, row in enumerate(grid_down):
+                results = executor.map(
+                    _evaluate_point,
+                    [row] * num_across,
+                    grid_across,
+                )
+                for j, one in enumerate(results):
+                    if one is None:
+                        continue
+                    valid_count += 1
+                    daz, drg, q = one
+                    az_off[i, j] = daz
+                    rg_off[i, j] = drg
+                    snr[i, j] = q
+                    cval = max(0.0, 1.0 - q)
+                    cov1[i, j] = cval
+                    cov2[i, j] = cval
+                    cov3[i, j] = cval
+
+    if valid_count < min_valid:
+        raise RuntimeError(
+            'External dense offsets failed: valid points={0}, required={1}'.format(
+                int(valid_count), int(min_valid)
+            )
+        )
+
+    logger.info(
+        'External dense offsets finished: valid_points=%d/%d (%.2f%%)',
+        int(valid_count),
+        int(num_across * num_down),
+        100.0 * float(valid_count) / float(max(1, num_across * num_down)),
+    )
+
+    outdata = np.empty((2 * num_down, num_across), dtype=np.float32)
+    outdata[::2, :] = az_off
+    outdata[1::2, :] = rg_off
+    outdata.tofile(denseOffsetFileName + '.bil')
+    del outdata
+
+    snr.tofile(denseOffsetFileName + '_snr.bil')
+
+    covdata = np.empty((3 * num_down, num_across), dtype=np.float32)
+    covdata[::3, :] = cov1
+    covdata[1::3, :] = cov2
+    covdata[2::3, :] = cov3
+    covdata.tofile(denseOffsetFileName + '_cov.bil')
+    del covdata
+
+    _render_dense_output_headers(denseOffsetFileName, num_across, num_down)
+    return (int(grid_down[0]), int(grid_across[0]))
 
 
 def _estimate_dense_memory_mb(num_windows, threads, ww, wh, sw, shh):
@@ -128,17 +332,17 @@ def _estimate_dense_memory_mb(num_windows, threads, ww, wh, sw, shh):
     patch_h = int(wh + 2 * shh)
     worker_bytes = float(max(1, threads)) * float(max(1, patch_w * patch_h)) * 16.0
     # Safety factor for Python/object overhead and library internals.
-    safety = max(1.0, _safe_float_env('ISCE_DENSE_MEMORY_SAFETY_FACTOR', 4.0))
+    safety = max(1.0, _safe_float_env('ISCE_DENSE_MEMORY_SAFETY_FACTOR', 3.0))
     total_bytes = (shared_bytes + write_bytes + worker_bytes) * safety
     return total_bytes / (1024.0 * 1024.0)
 
 
 def _apply_dense_safeguards(num_windows, est_mem_mb, threads):
     min_threads = max(1, _safe_int_env('ISCE_DENSE_MIN_THREADS', 1))
-    soft_max_windows = max(1, _safe_int_env('ISCE_DENSE_SOFT_MAX_WINDOWS', 250000))
-    hard_max_windows = max(soft_max_windows, _safe_int_env('ISCE_DENSE_HARD_MAX_WINDOWS', 500000))
-    soft_max_mem_mb = max(1.0, _safe_float_env('ISCE_DENSE_SOFT_MAX_EST_MEMORY_MB', 4096.0))
-    hard_max_mem_mb = max(soft_max_mem_mb, _safe_float_env('ISCE_DENSE_HARD_MAX_EST_MEMORY_MB', 8192.0))
+    soft_max_windows = max(1, _safe_int_env('ISCE_DENSE_SOFT_MAX_WINDOWS', 400000))
+    hard_max_windows = max(soft_max_windows, _safe_int_env('ISCE_DENSE_HARD_MAX_WINDOWS', 800000))
+    soft_max_mem_mb = max(1.0, _safe_float_env('ISCE_DENSE_SOFT_MAX_EST_MEMORY_MB', 6144.0))
+    hard_max_mem_mb = max(soft_max_mem_mb, _safe_float_env('ISCE_DENSE_HARD_MAX_EST_MEMORY_MB', 12288.0))
     auto_reduce = _safe_bool_env('ISCE_DENSE_AUTO_REDUCE_THREADS', True)
     reject_on_hard = _safe_bool_env('ISCE_DENSE_REJECT_ON_HARD_LIMIT', True)
 
@@ -466,6 +670,7 @@ def runDenseOffsets(self):
     )
 
     field = None
+    external_dense_enabled = _safe_bool_env('ISCE_DENSE_EXTERNAL_ENABLED', True)
     use_gpu_raw = getattr(self, 'useGPU', False)
     use_gpu = _safe_bool(use_gpu_raw, default=False)
     logger.info(
@@ -503,6 +708,31 @@ def runDenseOffsets(self):
     if field is None:
         if use_gpu and (not gpu_available):
             logger.info('GPU requested but unavailable for stripmap dense offsets. Using CPU DenseAmpcor.')
+        if external_dense_enabled:
+            try:
+                field = estimateOffsetFieldExternal(
+                    referenceSlc,
+                    secondarySlc,
+                    denseOffsetFilename,
+                    ww=self.denseWindowWidth,
+                    wh=self.denseWindowHeight,
+                    sw=self.denseSearchWidth,
+                    shh=self.denseSearchHeight,
+                    kw=self.denseSkipWidth,
+                    kh=self.denseSkipHeight,
+                    threads=dense_threads,
+                )
+                logger.info('Dense offsets computed with external coregistration path on CPU.')
+            except Exception as err:
+                logger.warning(
+                    'External dense-offset path failed (%s). Falling back to CPU DenseAmpcor.',
+                    str(err),
+                    exc_info=True
+                )
+        else:
+            logger.info('External dense-offset path disabled by ISCE_DENSE_EXTERNAL_ENABLED=0.')
+
+    if field is None:
         field = estimateOffsetField(
             referenceSlc,
             secondarySlc,
