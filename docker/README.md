@@ -39,6 +39,22 @@ docker run --rm \
   <image> <cmd>
 ```
 
+## SNAPHU in CUDA image
+
+`docker/Dockerfile.cuda` installs `snaphu` from Ubuntu apt packages and sets:
+
+```bash
+ISCE_SNAPHU_RUN_MODE=external
+ISCE_SNAPHU_BIN=/usr/bin/snaphu
+ISCE_SNAPHU_NPROC=8
+ISCE_SNAPHU_NTILEROW=2
+ISCE_SNAPHU_NTILECOL=2
+ISCE_SNAPHU_ROWOVRLP=240
+ISCE_SNAPHU_COLOVRLP=240
+```
+
+You can override them in `docker run -e ...` as needed.
+
 ## Automatic postprocess hook before `endup`
 
 Main ISCE2 apps (`topsApp`, `insarApp`, `stripmapApp`, `alos2App`,
