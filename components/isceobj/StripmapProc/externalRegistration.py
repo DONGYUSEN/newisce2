@@ -26,6 +26,9 @@ _DEFAULT_CONFIG = {
     'coarse_prefer_larger_window': True,
     'coarse_log_candidates': True,
     'coarse_quality_threshold': 0.06,
+    'coarse_auto_efficiency_balance': True,
+    'coarse_quality_margin_for_smaller_window': 0.03,
+    'coarse_spread_margin_for_smaller_window': 2.0,
     'fine_window': 128,
     'fine_spacing': 128,
     'fine_quality_threshold': 0.05,
@@ -440,6 +443,59 @@ def _coarse_registration(master_amp, slave_amp, cfg, logger=None):
                 ),
             )
             selection_mode = 'consistency_first'
+
+            if bool(cfg.get('coarse_auto_efficiency_balance', True)):
+                quality_margin = max(
+                    0.0,
+                    float(cfg.get('coarse_quality_margin_for_smaller_window', 0.03)),
+                )
+                spread_margin = max(
+                    0.0,
+                    float(cfg.get('coarse_spread_margin_for_smaller_window', 2.0)),
+                )
+
+                best_window = int(best.get('window', 0))
+                best_quality = float(best.get('quality_median', 0.0))
+                best_spread = float(best.get('spread', np.inf))
+
+                # When quality gain is limited, prefer a smaller coarse window
+                # to reduce runtime while keeping fit reliability.
+                smaller_candidates = [
+                    r for r in qualified
+                    if int(r.get('window', 0)) < best_window
+                    and (best_quality - float(r.get('quality_median', 0.0))) <= quality_margin
+                    and (float(r.get('spread', np.inf)) - best_spread) <= spread_margin
+                ]
+
+                if smaller_candidates:
+                    balanced = max(
+                        smaller_candidates,
+                        key=lambda r: (
+                            int(r.get('num_valid', 0)),
+                            -int(r.get('window', 0)),
+                            float(r.get('quality_median', 0.0)),
+                            -float(r.get('spread', np.inf)),
+                        ),
+                    )
+                    if logger is not None:
+                        logger.info(
+                            'External coarse auto-balance switched to smaller window: '
+                            'from search_range=%d window=%d quality=%.5f spread=%.6f '
+                            'to search_range=%d window=%d quality=%.5f spread=%.6f '
+                            '(quality_margin=%.5f, spread_margin=%.5f)',
+                            int(best.get('search_range', 0)),
+                            int(best.get('window', 0)),
+                            float(best.get('quality_median', 0.0)),
+                            float(best.get('spread', 0.0)),
+                            int(balanced.get('search_range', 0)),
+                            int(balanced.get('window', 0)),
+                            float(balanced.get('quality_median', 0.0)),
+                            float(balanced.get('spread', 0.0)),
+                            quality_margin,
+                            spread_margin,
+                        )
+                    best = balanced
+                    selection_mode = 'consistency_first_auto_balance'
         else:
             best = max(
                 qualified,

@@ -188,6 +188,18 @@ def _integrated_external_config():
         ),
         'coarse_log_candidates': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_COARSE_LOG', True),
         'coarse_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_COARSE_QUALITY', 0.06),
+        'coarse_auto_efficiency_balance': _parse_bool_env(
+            'ISCE_EXTERNAL_REGISTRATION_COARSE_AUTO_EFFICIENCY_BALANCE',
+            True,
+        ),
+        'coarse_quality_margin_for_smaller_window': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_COARSE_QUALITY_MARGIN',
+            0.03,
+        ),
+        'coarse_spread_margin_for_smaller_window': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_COARSE_SPREAD_MARGIN',
+            2.0,
+        ),
         'fine_window': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_WINDOW', 128),
         'fine_spacing': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_SPACING', 128),
         'fine_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_FINE_QUALITY', 0.05),
