@@ -15,7 +15,7 @@ _DEFAULT_CONFIG = {
     'coarse_window': 256,
     'coarse_multiscale': True,
     'coarse_window_factors': [0.5, 1.0, 2.0],
-    'coarse_search_ranges': [64, 128, 256, 512, 1024],
+    'coarse_search_ranges': [32, 64, 128, 256, 512, 1024],
     'coarse_window_scale': 4.0,
     'coarse_consistency_priority': True,
     'coarse_correlation_threshold': 0.06,
@@ -429,13 +429,14 @@ def _coarse_registration(master_amp, slave_amp, cfg, logger=None):
 
     if qualified:
         if consistency_priority:
-            best = min(
+            # Priority requested: valid count first, then quality, then spread.
+            best = max(
                 qualified,
                 key=lambda r: (
-                    float(r.get('spread', np.inf)),
-                    -int(r.get('num_valid', 0)),
-                    -float(r.get('quality_median', 0.0)),
-                    -int(r.get('window', 0)) if prefer_larger else 0,
+                    int(r.get('num_valid', 0)),
+                    float(r.get('quality_median', 0.0)),
+                    -float(r.get('spread', np.inf)),
+                    int(r.get('window', 0)) if prefer_larger else 0,
                 ),
             )
             selection_mode = 'consistency_first'

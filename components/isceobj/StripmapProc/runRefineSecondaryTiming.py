@@ -167,7 +167,7 @@ def _integrated_external_config():
         ),
         'coarse_search_ranges': _safe_int_list_env(
             'ISCE_EXTERNAL_REGISTRATION_COARSE_SEARCH_RANGES',
-            [64, 128, 256, 512, 1024],
+            [32, 64, 128, 256, 512, 1024],
         ),
         'coarse_window_scale': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_COARSE_WINDOW_SCALE', 4.0),
         'coarse_grid_size': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_COARSE_GRID_SIZE', 3),
