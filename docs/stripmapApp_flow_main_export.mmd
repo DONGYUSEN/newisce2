@@ -1,0 +1,118 @@
+flowchart TD
+    A[Start: stripmapApp.run] --> B[Configure parameters and facilities]
+    B --> C[preprocess: runPreprocessor]
+
+    C --> C1{reference/secondary raw?}
+    C1 -->|RAW| C2[make_raw + Doppler method]
+    C1 -->|SLC| C3[Read SLC metadata + geometry system]
+    C2 --> C4[Save referenceRawProduct/secondaryRawProduct]
+    C3 --> C5[Save referenceSlcProduct/secondarySlcProduct]
+    C4 --> D[cropraw: runCrop True ]
+    C5 --> D
+
+    D --> D1{regionOfInterest set?}
+    D1 -->|No| D2[Skip raw crop]
+    D1 -->|Yes| D3[geo bbox -> az/range box + cropFrame]
+    D2 --> E[formslc: runFormSLC]
+    D3 --> E
+
+    E --> E1{raw products exist?}
+    E1 -->|Yes| E2[Focus RAW to SLC]
+    E1 -->|No| E3[Skip focusing]
+    E2 --> F[cropslc: runCrop False ]
+    E3 --> F
+
+    F --> F1{regionOfInterest set?}
+    F1 -->|No| F2[Skip SLC crop]
+    F1 -->|Yes| F3[geo bbox -> az/range box + cropFrame]
+    F2 --> G[verifyDEM]
+    F3 --> G
+
+    G --> G1{demFilename provided?}
+    G1 -->|Yes| G2[Load/convert DEM to WGS84]
+    G1 -->|No| G3[Estimate bbox from ref/sec geometry and download DEM]
+    G2 --> H[topo]
+    G3 --> H
+
+    H --> H1{useGPU and GPU topo available?}
+    H1 -->|Yes| H2[runTopoGPU]
+    H1 -->|No or fail| H3[runTopoCPU]
+    H2 --> I[geo2rdr]
+    H3 --> I
+
+    I --> I1{useGPU and GPU geo2rdr available?}
+    I1 -->|Yes| I2[runGeo2rdrGPU]
+    I1 -->|No or fail| I3[runGeo2rdrCPU]
+    I2 --> J[coarse_resample]
+    I3 --> J
+
+    J --> K[misregistration: runRefineSecondaryTiming]
+    K --> L[refined_resample]
+
+    L --> M[dense_offsets]
+    M --> M1{doDenseOffsets?}
+    M1 -->|No| M2[Skip dense offsets]
+    M1 -->|Yes| M3[GPU -> External CPU -> DenseAmpcor fallback]
+
+    M2 --> N[rubber_sheet_range]
+    M3 --> N
+
+    N --> N1{doRubbersheetingRange and doDenseOffsets?}
+    N1 -->|Yes| N2[Filter dense range offsets + add to geometric offsets]
+    N1 -->|No| N3[Skip range rubbersheet]
+
+    N2 --> O[rubber_sheet_azimuth]
+    N3 --> O
+
+    O --> O1{doRubbersheetingAzimuth and doDenseOffsets?}
+    O1 -->|Yes| O2[Filter dense az offsets + add to geometric offsets]
+    O1 -->|No| O3[Skip azimuth rubbersheet]
+
+    O2 --> P[fine_resample]
+    O3 --> P
+
+    P --> P1{any rubbersheet enabled?}
+    P1 -->|No| P2[Skip fine resample]
+    P1 -->|Yes| P3[Resample with rubber-sheeted offsets]
+
+    P2 --> Q[split_range_spectrum]
+    P3 --> Q
+
+    Q --> Q1{doSplitSpectrum?}
+    Q1 -->|No| Q2[Skip split-spectrum]
+    Q1 -->|Yes| Q3[Generate low/high subband SLCs]
+
+    Q2 --> R[sub_band_resample]
+    Q3 --> R
+
+    R --> R1{doSplitSpectrum?}
+    R1 -->|No| R2[Skip sub-band resample]
+    R1 -->|Yes| R3[Resample secondary low/high subbands]
+
+    R2 --> S[interferogram full ]
+    R3 --> S
+
+    S --> T[sub_band_interferogram]
+    T --> T1{doDispersive?}
+    T1 -->|No| T2[Skip sub-band interferograms]
+    T1 -->|Yes| T3[Generate low/high interferograms]
+
+    T2 --> U[filter full/low/high]
+    T3 --> U
+
+    U --> V[unwrap full/low/high]
+    V --> W[ionosphere: runDispersive]
+    W --> W1{doDispersive?}
+    W1 -->|No| W2[Skip dispersive estimation]
+    W1 -->|Yes| W3[Estimate dispersive/non-dispersive + filtering + unwrap-error correction]
+
+    W2 --> X[geocode]
+    W3 --> X
+
+    X --> Y[geocodeoffsets]
+    Y --> Y1{is offset mode and doDenseOffsets?}
+    Y1 -->|No| Y2[Skip offset geocode]
+    Y1 -->|Yes| Y3[Geocode offsets]
+
+    Y2 --> Z[End]
+    Y3 --> Z
