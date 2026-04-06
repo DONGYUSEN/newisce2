@@ -11,6 +11,7 @@ InstallSameDir(
     runGeo2rdr.py
     runGeocode.py
     runInterferogram.py
+    runNormalizeSecondarySampling.py
     runPreprocessor.py
     runRefineSecondaryTiming.py
     externalRegistration.py
