@@ -104,6 +104,19 @@ class config(object):
         self.f.write('outdir : ' + self.offsetDir+'\n')
         self.f.write('##########################'+'\n')
 
+    def normalizeSecondarySampling(self, function):
+        self.f.write('##########################'+'\n')
+        self.f.write(function+'\n')
+        self.f.write('normalizeSecondarySampling : ' + '\n')
+        self.f.write('reference : ' + self.referenceSlc + '\n')
+        self.f.write('secondary : ' + self.secondarySlc + '\n')
+        self.f.write('outdir : ' + self.normalizedSecondarySlc + '\n')
+        self.f.write('normalizeSecondaryPrfThreshold : ' + str(self.normalizeSecondaryPrfThreshold) + '\n')
+        self.f.write('normalizeSecondaryAzimuthDriftThreshold : ' + str(self.normalizeSecondaryAzimuthDriftThreshold) + '\n')
+        self.f.write('normalizeSecondaryDopplerThreshold : ' + str(self.normalizeSecondaryDopplerThreshold) + '\n')
+        self.f.write('normalizeSecondaryDopplerToReference : ' + str(int(self.normalizeSecondaryDopplerToReference)) + '\n')
+        self.f.write('##########################'+'\n')
+
     def resampleSlc(self, function):
         self.f.write('##########################'+'\n')
         self.f.write(function+'\n')
@@ -294,6 +307,17 @@ class run(object):
         self.configDir = os.path.join(self.workDir,'configs')
         os.makedirs(self.configDir, exist_ok=True)
 
+        if not hasattr(self, 'normalizeSecondaryForCorrelation'):
+            self.normalizeSecondaryForCorrelation = True
+        if not hasattr(self, 'normalizeSecondaryPrfThreshold'):
+            self.normalizeSecondaryPrfThreshold = 5.0e-4
+        if not hasattr(self, 'normalizeSecondaryAzimuthDriftThreshold'):
+            self.normalizeSecondaryAzimuthDriftThreshold = 1.0
+        if not hasattr(self, 'normalizeSecondaryDopplerThreshold'):
+            self.normalizeSecondaryDopplerThreshold = 0.02
+        if not hasattr(self, 'normalizeSecondaryDopplerToReference'):
+            self.normalizeSecondaryDopplerToReference = 1
+
         # passing argument of started from raw
         if inps.nofocus is  False:
             self.raw_string = '.raw'
@@ -305,6 +329,16 @@ class run(object):
         selfdense_offsets_folder = inps.dense_offsets_folder
 
         self.runf= open(self.run_outname,'w')
+
+    def _normalized_secondary_dir(self, date):
+        return os.path.join(self.workDir, 'coregSLC', 'Normalized', date)
+
+    def _secondary_metadata_dir(self, date, stackReference):
+        if date == stackReference:
+            return os.path.join(self.slcDir, date)
+        if not self.normalizeSecondaryForCorrelation:
+            return os.path.join(self.slcDir, date)
+        return self._normalized_secondary_dir(date)
 
     def crop(self, acquisitionDates, config_prefix, native=True, israw=True):
         for d in acquisitionDates:
@@ -382,12 +416,24 @@ class run(object):
             configObj.configure(self)
             configObj.referenceSlc = os.path.join(self.slcDir, stackReference)
             configObj.secondarySlc = os.path.join(self.slcDir, secondary)
+            configObj.normalizedSecondarySlc = self._normalized_secondary_dir(secondary)
             configObj.geometryDir = os.path.join(self.workDir, self.stack_folder,'geom_reference')
             configObj.offsetDir = os.path.join(self.workDir, 'offsets',secondary)
             configObj.nativeDoppler = native
-            configObj.geo2rdr('[Function-1]')
+
+            counter = 1
+            if self.normalizeSecondaryForCorrelation:
+                configObj.normalizeSecondaryPrfThreshold = self.normalizeSecondaryPrfThreshold
+                configObj.normalizeSecondaryAzimuthDriftThreshold = self.normalizeSecondaryAzimuthDriftThreshold
+                configObj.normalizeSecondaryDopplerThreshold = self.normalizeSecondaryDopplerThreshold
+                configObj.normalizeSecondaryDopplerToReference = self.normalizeSecondaryDopplerToReference
+                configObj.normalizeSecondarySampling('[Function-{0}]'.format(counter))
+                configObj.secondarySlc = configObj.normalizedSecondarySlc
+                counter += 1
+
+            configObj.geo2rdr('[Function-{0}]'.format(counter))
             configObj.coregSecondarySlc = os.path.join(self.workDir, 'coregSLC','Coarse',secondary)
-            configObj.resampleSlc('[Function-2]')
+            configObj.resampleSlc('[Function-{0}]'.format(counter + 1))
             configObj.finalize()
             del configObj
             self.runf.write(self.text_cmd+'stripmapWrapper.py -c '+ configName+'\n')
@@ -402,7 +448,7 @@ class run(object):
             configObj.referenceSlc = os.path.join(self.slcDir, stackReference,stackReference+self.raw_string+'.slc')
             configObj.secondarySlc = os.path.join(self.workDir, 'coregSLC','Coarse', secondary,secondary +'.slc')
             configObj.referenceMetaData = os.path.join(self.slcDir, stackReference)
-            configObj.secondaryMetaData = os.path.join(self.slcDir, secondary)
+            configObj.secondaryMetaData = self._secondary_metadata_dir(secondary, stackReference)
             configObj.outfile = os.path.join(self.workDir, 'offsets', secondary ,'misreg')
             configObj.refineSecondaryTiming('[Function-1]')
             configObj.finalize()
@@ -423,8 +469,8 @@ class run(object):
                 configObj.secondarySlc = os.path.join(self.slcDir,stackReference, stackReference+self.raw_string+'.slc')
             else:
                 configObj.secondarySlc = os.path.join(self.workDir, 'coregSLC','Coarse', pair[1], pair[1] + '.slc')
-            configObj.referenceMetaData = os.path.join(self.slcDir, pair[0])
-            configObj.secondaryMetaData = os.path.join(self.slcDir, pair[1])
+            configObj.referenceMetaData = self._secondary_metadata_dir(pair[0], stackReference)
+            configObj.secondaryMetaData = self._secondary_metadata_dir(pair[1], stackReference)
             configObj.outfile = os.path.join(self.workDir, 'refineSecondaryTiming','pairs', pair[0] + '_' + pair[1] ,'misreg')
             configObj.refineSecondaryTiming('[Function-1]')
             configObj.finalize()
@@ -568,7 +614,7 @@ class run(object):
             configObj = config(configName)
             configObj.configure(self)
             configObj.referenceSlc = os.path.join(self.slcDir, stackReference)
-            configObj.secondarySlc = os.path.join(self.slcDir, secondary)
+            configObj.secondarySlc = self._secondary_metadata_dir(secondary, stackReference)
             configObj.offsetDir = os.path.join(self.workDir, 'offsets',secondary)
             configObj.coregSecondarySlc = os.path.join(self.workDir,self.stack_folder,'SLC',secondary) 
             configObj.misreg = os.path.join(self.workDir, 'refineSecondaryTiming','dates', secondary, 'misreg')
@@ -863,4 +909,3 @@ if __name__ == "__main__":
     # Main engine  
     main()
        
-

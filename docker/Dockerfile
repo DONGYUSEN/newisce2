@@ -152,6 +152,7 @@ RUN ln -s /usr/lib/python3.10/dist-packages/isce2 /usr/lib/python3.10/dist-packa
 RUN set -ex \
  && PYTHONPATH=/usr/lib/python3.10/dist-packages/isce2/components:/usr/lib/python3.10/dist-packages/isce2:/usr/lib/python3.10/dist-packages:${PYTHONPATH} python3 - <<'PY'
 import importlib
+from pathlib import Path
 import isce
 
 modules = [
@@ -159,15 +160,24 @@ modules = [
     'isceobj.StripmapProc.runFilter',
     'isceobj.IsceProc.runFilter',
     'isceobj.TopsProc.runFilter',
+    'isceobj.StripmapProc.runNormalizeSecondarySampling',
 ]
 
 for name in modules:
     module = importlib.import_module(name)
-    for symbol in ('_validated_alpha', '_validate_interferogram', '_validate_output'):
+    if name.endswith('runNormalizeSecondarySampling'):
+        required = ('runNormalizeSecondarySampling',)
+    else:
+        required = ('_validated_alpha', '_validate_interferogram', '_validate_output')
+    for symbol in required:
         if not hasattr(module, symbol):
             raise RuntimeError('{0} is missing {1}'.format(name, symbol))
 
-print('ISCE2 runFilter validation hooks verified in container.')
+stack_norm = Path('/opt/isce2/contrib/stack/stripmapStack/normalizeSecondarySampling.py')
+if not stack_norm.exists():
+    raise RuntimeError('Missing stripmapStack normalization script: {0}'.format(stack_norm))
+
+print('ISCE2 validation hooks and stripmapStack normalization script verified in container.')
 PY
 
 RUN set -ex \

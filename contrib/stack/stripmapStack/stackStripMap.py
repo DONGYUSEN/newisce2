@@ -110,6 +110,24 @@ def createParser():
              help='Force enabling GPU when available (default: auto-detect)')
     parser.add_argument('-noGPU', '--noGPU', dest='useGPU', action='store_false',
              help='Force disabling GPU')
+    parser.add_argument('--normalizeSecondaryForCorrelation', dest='normalizeSecondaryForCorrelation',
+             action='store_true', default=True,
+             help='Enable secondary PRF/DC pre-normalization before geo2rdr/coarse resampling (default: enabled).')
+    parser.add_argument('--noNormalizeSecondaryForCorrelation', dest='normalizeSecondaryForCorrelation',
+             action='store_false',
+             help='Disable secondary PRF/DC pre-normalization step.')
+    parser.add_argument('--normalizeSecondaryPrfThreshold', dest='normalizeSecondaryPrfThreshold',
+             type=float, default=5.0e-4,
+             help='Relative PRF mismatch threshold for normalization trigger (default: 5e-4).')
+    parser.add_argument('--normalizeSecondaryAzimuthDriftThreshold', dest='normalizeSecondaryAzimuthDriftThreshold',
+             type=float, default=1.0,
+             help='Azimuth drift threshold in lines for normalization trigger (default: 1.0).')
+    parser.add_argument('--normalizeSecondaryDopplerThreshold', dest='normalizeSecondaryDopplerThreshold',
+             type=float, default=0.02,
+             help='Normalized Doppler mismatch threshold for DC harmonization trigger (default: 0.02).')
+    parser.add_argument('--normalizeSecondaryDopplerToReference', dest='normalizeSecondaryDopplerToReference',
+             type=int, default=1,
+             help='Set to 1 to harmonize secondary Doppler to reference when triggered; 0 to disable.')
 
     parser.add_argument('--summary', dest='summary', action='store_true', default=False, help='Show summary only')
     return parser
