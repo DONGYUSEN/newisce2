@@ -709,51 +709,13 @@ def runRefineSecondaryTiming(self):
     fallback_cfg = _fallback_fit_config(self)
 
     # Policy:
-    # 1) useGPU=False (explicitly configured) => force integrated external registration.
-    # 2) useGPU=True or omitted (default True) => use GPU Ampcor path; do not auto-switch
-    #    to integrated external registration.
+    # 1) External coregistration is OFF by default and only enabled by
+    #    stripmapApp parameter useExternalCoregistration=True.
+    # 2) When external coregistration is disabled:
+    #      useGPU=True  -> GPU Ampcor (fallback to CPU Ampcor on failure/unavailable)
+    #      useGPU=False -> CPU Ampcor
     use_gpu_flag = bool(getattr(self, 'useGPU', False))
-    external_enabled = False
-
-    if use_gpu_flag:
-        gpu_available = _gpu_ampcor_available(self)
-        if gpu_available:
-            try:
-                logger.info('useGPU=True (or default). Running GPU Ampcor for misregistration.')
-                gpu_prefix = os.path.join(misregDir, 'gpu_ampcor_offsets')
-                field = estimateOffsetFieldGPU(referenceSlc, secondarySlc, gpu_prefix)
-                logger.info('GPU Ampcor fit configuration: %s', fallback_cfg)
-                _save_ampcor_solution(
-                    self,
-                    outShelveFile,
-                    field,
-                    fallback_cfg,
-                    azratio,
-                    rgratio,
-                    source='gpu_ampcor',
-                )
-                logger.info('GPU Ampcor succeeded; using GPU misregistration polynomials.')
-                return None
-            except Exception as err:
-                logger.warning(
-                    'GPU Ampcor failed (%s). Integrated external registration is disabled under '
-                    'useGPU=True policy; continuing to CPU Ampcor fallback/zero-poly policy.',
-                    err,
-                    exc_info=True,
-                )
-        else:
-            logger.warning(
-                'useGPU=True (or default), but GPU Ampcor is unavailable. '
-                'Integrated external registration is disabled under useGPU=True policy; '
-                'continuing to CPU Ampcor fallback/zero-poly policy.'
-            )
-        external_enabled = False
-    else:
-        logger.info(
-            'useGPU=False detected. Forcing integrated external registration '
-            '(coarse + fine registration).'
-        )
-        external_enabled = True
+    external_enabled = bool(getattr(self, 'useExternalCoregistration', False))
 
     if external_enabled:
         try:
@@ -809,59 +771,47 @@ def runRefineSecondaryTiming(self):
             logger.info('Integrated external registration succeeded; using generated misregistration polynomials.')
             return None
         except Exception as err:
-            if _integrated_external_no_ampcor_fallback_on_error() or (not _allow_cpu_ampcor_fallback()):
-                logger.warning(
-                    'Integrated external registration failed (%s). '
-                    'Skipping CPU Ampcor fallback and not auto-enabling dense/rubbersheet workflow '
-                    '(use XML doDenseOffsets/doRubbersheeting* flags explicitly).',
-                    err,
-                    exc_info=True,
-                )
-
-                _enable_dense_rubbersheet(
-                    self,
-                    reason='external registration runtime failure',
-                )
-
-                ext_meta = {
-                    'enabled': True,
-                    'mode': 'external_failed_zero_poly_no_cpu_ampcor_fallback',
-                    'error': str(err),
-                    'quality_gate': {
-                        'passed': False,
-                        'mode': 'external_error_no_cpu_ampcor_fallback',
-                    },
-                }
-                _save_zero_misreg_polys(self, outShelveFile, ext_meta)
-                return None
-
             logger.warning(
-                'Integrated external registration failed (%s). '
-                'Falling back to CPU Ampcor because ISCE_ALLOW_CPU_AMPCOR_FALLBACK=1.',
+                'Integrated external registration failed (%s). Falling back to Ampcor path.',
                 err,
                 exc_info=True,
             )
     else:
-        logger.info('Integrated external registration disabled by ISCE_EXTERNAL_REGISTRATION_ENABLED.')
+        logger.info('Integrated external registration disabled by useExternalCoregistration=False.')
 
-    if not _allow_cpu_ampcor_fallback():
-        logger.warning(
-            'CPU Ampcor fallback is disabled and no registration solution is available. '
-            'Writing zero misregistration polynomials.'
-        )
-        ext_meta = {
-            'enabled': False,
-            'mode': 'cpu_ampcor_fallback_disabled_zero_poly',
-            'quality_gate': {
-                'passed': False,
-                'mode': 'cpu_ampcor_fallback_disabled',
-            },
-        }
-        _save_zero_misreg_polys(self, outShelveFile, ext_meta)
-        return None
+    if use_gpu_flag:
+        gpu_available = _gpu_ampcor_available(self)
+        if gpu_available:
+            try:
+                logger.info('useGPU=True: running GPU Ampcor for misregistration.')
+                gpu_prefix = os.path.join(misregDir, 'gpu_ampcor_offsets')
+                field = estimateOffsetFieldGPU(referenceSlc, secondarySlc, gpu_prefix)
+                logger.info('GPU Ampcor fit configuration: %s', fallback_cfg)
+                _save_ampcor_solution(
+                    self,
+                    outShelveFile,
+                    field,
+                    fallback_cfg,
+                    azratio,
+                    rgratio,
+                    source='gpu_ampcor',
+                )
+                logger.info('GPU Ampcor succeeded; using GPU misregistration polynomials.')
+                return None
+            except Exception as err:
+                logger.warning(
+                    'GPU Ampcor failed (%s). Falling back to CPU Ampcor.',
+                    err,
+                    exc_info=True,
+                )
+        else:
+            logger.warning(
+                'useGPU=True, but GPU Ampcor is unavailable. Falling back to CPU Ampcor.'
+            )
 
+    logger.info('Running CPU Ampcor for misregistration.')
     field = estimateOffsetField(referenceSlc, secondarySlc)
-    logger.info('CPU Ampcor fallback fit configuration: %s', fallback_cfg)
+    logger.info('CPU Ampcor fit configuration: %s', fallback_cfg)
     _save_ampcor_solution(
         self,
         outShelveFile,

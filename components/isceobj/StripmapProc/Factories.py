@@ -105,6 +105,7 @@ def createUnwrapper(other, do_unwrap = None, unwrapperName = None,
 createFormSLC = _factory("runROI", "runFormSLC")
 createCrop = _factory("runCrop")
 createPreprocessor = _factory("runPreprocessor")
+createNormalizeSecondarySampling = _factory("runNormalizeSecondarySampling")
 createTopo = _factory("runTopo")
 createGeo2rdr = _factory("runGeo2rdr")
 createSplitSpectrum = _factory("runSplitSpectrum")

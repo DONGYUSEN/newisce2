@@ -407,6 +407,15 @@ USE_GPU = Application.Parameter(
     doc='Prefer GPU-enabled processing where stripmap pipeline supports it. / 在 stripmap 支持的步骤优先使用 GPU。'
 )
 
+USE_EXTERNAL_COREGISTRATION = Application.Parameter(
+    'useExternalCoregistration',
+    public_name='use external coregistration',
+    default=False,
+    type=bool,
+    mandatory=False,
+    doc='Enable integrated external coregistration in refine-secondary-timing. Disabled by default.'
+)
+
 ############################################## Modified by V.Brancato 10.07.2019
 DO_RUBBERSHEETINGAZIMUTH = Application.Parameter('doRubbersheetingAzimuth', 
                                       public_name='do rubbersheetingAzimuth',
@@ -485,6 +494,60 @@ REFINE_TIMING_SNR_THRESHOLD = Application.Parameter(
     type=float,
     mandatory=False,
     doc='Fallback refine-secondary-timing SNR threshold used by offoutliers.'
+)
+
+NORMALIZE_SECONDARY_FOR_CORRELATION = Application.Parameter(
+    'normalizeSecondaryForCorrelation',
+    public_name='normalize secondary before correlation',
+    default=True,
+    type=bool,
+    mandatory=False,
+    doc='Auto-detect impactful PRF/DC mismatch and pre-normalize secondary before geo2rdr/correlation.'
+)
+
+NORMALIZE_SECONDARY_FORCE = Application.Parameter(
+    'normalizeSecondaryForce',
+    public_name='force secondary normalization',
+    default=False,
+    type=bool,
+    mandatory=False,
+    doc='Force pre-normalization of secondary PRF/DC regardless of mismatch metrics.'
+)
+
+NORMALIZE_SECONDARY_PRF_THRESHOLD = Application.Parameter(
+    'normalizeSecondaryPrfThreshold',
+    public_name='secondary PRF relative threshold',
+    default=5.0e-4,
+    type=float,
+    mandatory=False,
+    doc='Relative PRF mismatch threshold to trigger secondary pre-normalization.'
+)
+
+NORMALIZE_SECONDARY_AZ_DRIFT_THRESHOLD = Application.Parameter(
+    'normalizeSecondaryAzimuthDriftThreshold',
+    public_name='secondary azimuth drift threshold',
+    default=1.0,
+    type=float,
+    mandatory=False,
+    doc='Estimated azimuth drift (lines) threshold to trigger PRF pre-normalization.'
+)
+
+NORMALIZE_SECONDARY_DOPPLER_THRESHOLD = Application.Parameter(
+    'normalizeSecondaryDopplerThreshold',
+    public_name='secondary doppler norm threshold',
+    default=0.02,
+    type=float,
+    mandatory=False,
+    doc='Normalized Doppler centroid mismatch threshold to trigger DC harmonization.'
+)
+
+NORMALIZE_SECONDARY_DOPPLER_TO_REFERENCE = Application.Parameter(
+    'normalizeSecondaryDopplerToReference',
+    public_name='harmonize secondary doppler',
+    default=True,
+    type=bool,
+    mandatory=False,
+    doc='When DC mismatch is impactful, copy reference Doppler polynomial to secondary metadata.'
 )
 
 DENSE_WINDOW_WIDTH = Application.Parameter('denseWindowWidth',
@@ -737,6 +800,7 @@ class _RoiBase(Application, FrameMixin):
                       SECONDARY_SENSOR_NAME,
                       FILTER_STRENGTH,
                       USE_GPU,
+                      USE_EXTERNAL_COREGISTRATION,
                       CORRELATION_METHOD,
                       REFERENCE_DOPPLER_METHOD,
                       SECONDARY_DOPPLER_METHOD,
@@ -767,6 +831,12 @@ class _RoiBase(Application, FrameMixin):
                       REFINE_TIMING_RANGE_AZIMUTH_ORDER,
                       REFINE_TIMING_RANGE_RANGE_ORDER,
                       REFINE_TIMING_SNR_THRESHOLD,
+                      NORMALIZE_SECONDARY_FOR_CORRELATION,
+                      NORMALIZE_SECONDARY_FORCE,
+                      NORMALIZE_SECONDARY_PRF_THRESHOLD,
+                      NORMALIZE_SECONDARY_AZ_DRIFT_THRESHOLD,
+                      NORMALIZE_SECONDARY_DOPPLER_THRESHOLD,
+                      NORMALIZE_SECONDARY_DOPPLER_TO_REFERENCE,
                       DENSE_WINDOW_WIDTH,
                       DENSE_WINDOW_HEIGHT,
                       DENSE_SEARCH_WIDTH,
@@ -1004,6 +1074,7 @@ class _RoiBase(Application, FrameMixin):
         self.runCrop = StripmapProc.createCrop(self)
         self.runSplitSpectrum = StripmapProc.createSplitSpectrum(self)
         self.runTopo = StripmapProc.createTopo(self)
+        self.runNormalizeSecondarySampling = StripmapProc.createNormalizeSecondarySampling(self)
         self.runGeo2rdr = StripmapProc.createGeo2rdr(self)
         self.runResampleSlc = StripmapProc.createResampleSlc(self)
         self.runRefineSecondaryTiming = StripmapProc.createRefineSecondaryTiming(self)
@@ -1046,6 +1117,8 @@ class _RoiBase(Application, FrameMixin):
         self.step('verifyDEM', func=self.verifyDEM)
 
         self.step('topo', func=self.runTopo)
+
+        self.step('normalize_secondary_sampling', func=self.runNormalizeSecondarySampling)
 
         self.step('geo2rdr', func=self.runGeo2rdr)
 
@@ -1125,6 +1198,9 @@ class _RoiBase(Application, FrameMixin):
 
         # run topo (mapping from radar to geo coordinates)
         self.runTopo()
+
+        # normalize secondary PRF/DC when mismatch is likely to impact correlation quality
+        self.runNormalizeSecondarySampling()
 
         # run geo2rdr (mapping from geo to radar coordinates)
         self.runGeo2rdr()
