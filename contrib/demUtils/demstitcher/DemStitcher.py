@@ -113,7 +113,7 @@ KEEP_AFTER_FAILED = Component.Parameter('_keepAfterFailed',
       "accidental deletion of files (default: False)")
 DIRECTORY = Component.Parameter('_downloadDir',
     public_name='directory',
-    default = './',
+    default = os.environ.get('ISCE_DEM_CACHE_DIR', '/Work/dem'),
     type = str,
     mandatory = False,
     doc = "If useLocalDirectory is False,it is used to download\n" + \

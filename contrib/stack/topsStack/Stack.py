@@ -7,6 +7,9 @@
 import os, glob, sys
 import datetime
 
+DEFAULT_S1_ORBIT_CACHE_DIR = '/Work/s1oribt'
+S1_ORBIT_CACHE_ENV = 'ISCE_S1_ORBIT_CACHE_DIR'
+
 
 noMCF = 'False'
 defoMax = '2'
@@ -1900,52 +1903,69 @@ class sentinelSLC(object):
     def get_orbit(self, orbitDir, workDir, margin=60.0):
         margin = datetime.timedelta(seconds=margin)
         datefmt = "%Y%m%dT%H%M%S"
-        orbit_files = glob.glob(os.path.join(orbitDir,  self.platform + '*.EOF'))
-        if len(orbit_files) == 0:
-            orbit_files = glob.glob(os.path.join(orbitDir, '*/{0}*.EOF'.format(self.platform)))
+        cacheOrbitDir = os.environ.get(S1_ORBIT_CACHE_ENV, DEFAULT_S1_ORBIT_CACHE_DIR)
+        search_dirs = []
+        if orbitDir:
+            search_dirs.append(orbitDir)
+        if cacheOrbitDir and cacheOrbitDir not in search_dirs:
+            search_dirs.append(cacheOrbitDir)
 
-        match = False
-        for orbit in orbit_files:
-           orbit = os.path.basename(orbit)
-           fields = orbit.split('_')
-           orbit_start_date_time = datetime.datetime.strptime(fields[6].replace('V',''), datefmt) + margin
-           orbit_stop_date_time = datetime.datetime.strptime(fields[7].replace('.EOF',''), datefmt) - margin
+        def _find_matching_orbit(dirname, apply_margin=True):
+            if not dirname:
+                return None
+            orbit_files = glob.glob(os.path.join(dirname, self.platform + '*.EOF'))
+            if len(orbit_files) == 0:
+                orbit_files = glob.glob(os.path.join(dirname, '*/{0}*.EOF'.format(self.platform)))
 
-           if self.start_date_time >= orbit_start_date_time and self.stop_date_time < orbit_stop_date_time:
-               self.orbit = os.path.join(orbitDir,orbit)
-               self.orbitType = 'precise'
-               match = True
-               break
-        if not match:
-           print ("*****************************************")
-           print (self.date)
-           print ("orbit was not found in the "+orbitDir) # It should go and look online
-           print ("downloading precise or restituted orbits ...")
+            for orbit_path in orbit_files:
+                orbit = os.path.basename(orbit_path)
+                fields = orbit.split('_')
+                try:
+                    orbit_start_date_time = datetime.datetime.strptime(fields[6].replace('V', ''), datefmt)
+                    orbit_stop_date_time = datetime.datetime.strptime(fields[7].replace('.EOF', ''), datefmt)
+                except Exception:
+                    continue
 
-           restitutedOrbitDir = os.path.join(workDir ,'orbits/' + self.date)
-           orbitFiles = glob.glob(os.path.join(restitutedOrbitDir,'*.EOF'))
-           if len(orbitFiles) > 0:
-              orbitFile = orbitFiles[0]
+                if apply_margin:
+                    orbit_start_date_time += margin
+                    orbit_stop_date_time -= margin
 
-              #fields = orbitFile.split('_')
-              fields = os.path.basename(orbitFile).split('_')
-              orbit_start_date_time = datetime.datetime.strptime(fields[6].replace('V',''), datefmt)
-              orbit_stop_date_time = datetime.datetime.strptime(fields[7].replace('.EOF',''), datefmt)
-              if self.start_date_time >= orbit_start_date_time and self.stop_date_time < orbit_stop_date_time:
-                  print ("restituted or precise orbit already exists.")
-                  self.orbit =  orbitFile
-                  self.orbitType = 'restituted'
+                if self.start_date_time >= orbit_start_date_time and self.stop_date_time < orbit_stop_date_time:
+                    return orbit_path
+            return None
 
-           #if not os.path.exists(restitutedOrbitDir):
-           else:
-              os.makedirs(restitutedOrbitDir, exist_ok=True)
+        for directory in search_dirs:
+            match_orbit = _find_matching_orbit(directory, apply_margin=True)
+            if match_orbit is not None:
+                self.orbit = os.path.abspath(match_orbit)
+                self.orbitType = 'precise' if 'AUX_POEORB' in os.path.basename(match_orbit) else 'restituted'
+                return
 
-              cmd = 'fetchOrbit.py -i ' + self.safe_file + ' -o ' + restitutedOrbitDir
-              print(cmd)
-              os.system(cmd)
-              orbitFile = glob.glob(os.path.join(restitutedOrbitDir,'*.EOF'))
-              self.orbit =  orbitFile[0]
-              self.orbitType = 'restituted'
+        print ("*****************************************")
+        print (self.date)
+        print ("orbit was not found in " + ", ".join(search_dirs))
+        print ("downloading precise or restituted orbits ...")
+
+        downloadOrbitDir = cacheOrbitDir if cacheOrbitDir else os.path.join(workDir, 'orbits/' + self.date)
+        os.makedirs(downloadOrbitDir, exist_ok=True)
+
+        match_orbit = _find_matching_orbit(downloadOrbitDir, apply_margin=False)
+        if match_orbit is not None:
+            print ("restituted or precise orbit already exists.")
+            self.orbit = os.path.abspath(match_orbit)
+            self.orbitType = 'precise' if 'AUX_POEORB' in os.path.basename(match_orbit) else 'restituted'
+            return
+
+        cmd = 'fetchOrbit.py -i "{0}" -o "{1}"'.format(self.safe_file, downloadOrbitDir)
+        print(cmd)
+        os.system(cmd)
+
+        match_orbit = _find_matching_orbit(downloadOrbitDir, apply_margin=False)
+        if match_orbit is None:
+            raise RuntimeError('Failed to download matching orbit into {0}'.format(downloadOrbitDir))
+
+        self.orbit = os.path.abspath(match_orbit)
+        self.orbitType = 'precise' if 'AUX_POEORB' in os.path.basename(match_orbit) else 'restituted'
 
 # an example for writing job files when using clusters
 

@@ -201,7 +201,8 @@ class DataRetriever(Component):
     def clean(self,listFile,report):
         for file in listFile:
             if report[file] == self._succeded:
-                os.remove(file)
+                if not self._keepArchives:
+                    os.remove(file)
     ##
     #After retrieving the files this function prints the status of the download for each file,
     #which could be 'succeeded' or 'failed'
@@ -311,6 +312,7 @@ class DataRetriever(Component):
         #map of the names before and after decompression
         self._namesMapping = {}
         self._downloadReport = {}
+        self._keepArchives = False
         # Note if _useLocalDirectory is True then the donwloadDir is the local directory
         ##self._downloadDir = os.getcwd()#default to the cwd
 

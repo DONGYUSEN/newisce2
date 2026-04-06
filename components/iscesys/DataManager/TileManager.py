@@ -221,6 +221,7 @@ class TileManager(Component,metaclass=abc.ABCMeta):
         self._retriever.pw = self._pw
         self._retriever.un = self._un
         self._retriever.downloadDir = self._downloadDir
+        self._retriever._keepArchives = self._keepArchives
         self._retriever.proceedIfNoServer = self._proceedIfNoServer
 
     def getFileList(self,names,report,map):
@@ -260,7 +261,9 @@ class TileManager(Component,metaclass=abc.ABCMeta):
     def clean(self):
         for name in self._stitcher.fileList:
             if not name == self._stitcher._toSkipName:
-                os.remove(name)
+                filepath = os.path.join(self._downloadDir, name)
+                if os.path.exists(filepath):
+                    os.remove(filepath)
     def createXml(self,lats,lons):
         image = self.createImage(lats,lons,self.outputFile)
         self._image = image
@@ -372,5 +375,6 @@ class TileManager(Component,metaclass=abc.ABCMeta):
         self._retriever = DR()
         self._stitcher = ST()
         self._image = None
+        self._keepArchives = False
 
         super(TileManager, self).__init__(family if family else  self.__class__.family, name=name)

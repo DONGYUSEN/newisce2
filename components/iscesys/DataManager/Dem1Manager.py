@@ -32,9 +32,12 @@
 from .SRTMManager import SRTMManager
 from iscesys.Component.Component import Component
 import numpy as np
+import os
 from isceobj.Image import createDemImage
 
 STEP_SRTMGL1_URL = 'https://step.esa.int/auxdata/dem/SRTMGL1'
+DEFAULT_DEM_CACHE_DIR = '/Work/dem'
+DEM_CACHE_ENV = 'ISCE_DEM_CACHE_DIR'
 
 EXTRA = Component.Parameter('_extra',
     public_name = 'extra',default = '.SRTMGL1',
@@ -139,6 +142,9 @@ class Dem1Manager(SRTMManager):
         self.parameter_list = self.parameter_list + super(SRTMManager,self).parameter_list
         self.updateParameters()
         super(Dem1Manager, self).__init__(family if family else  self.__class__.family, name=name)
+        if self._downloadDir in (None, '', '.', './'):
+            self._downloadDir = os.environ.get(DEM_CACHE_ENV, DEFAULT_DEM_CACHE_DIR)
+        self._keepArchives = True
         self._tileWidth = 3600
     def updateParameters(self):
         self.extendParameterList(SRTMManager,Dem1Manager)

@@ -37,6 +37,7 @@ import subprocess
 from contrib.demUtils import createDemStitcher
 
 STEP_SRTMGL1_URL = 'https://step.esa.int/auxdata/dem/SRTMGL1'
+DEFAULT_DEM_CACHE_DIR = os.environ.get('ISCE_DEM_CACHE_DIR', '/Work/dem')
 
 
 def _refresh_isce_metadata(dem_path):
@@ -199,7 +200,7 @@ def main():
     parser.add_argument('-r', '--report', action = 'store_true', dest = 'report', help = 'If the option is present then failed and succeeded downloads are printed (default: %(default)s)')
     parser.add_argument('-l', '--local', action = 'store_true', dest = 'local', help = 'If the option is present then use the files that are in the location \
                         specified by --dir. If not present --dir indicates the directory where the files are downloaded (default: %(default)s)')
-    parser.add_argument('-d', '--dir', type = str, dest = 'dir', default = './', help = 'If used in conjunction with --local it specifies the location where the DEMs are located \
+    parser.add_argument('-d', '--dir', type = str, dest = 'dir', default = DEFAULT_DEM_CACHE_DIR, help = 'If used in conjunction with --local it specifies the location where the DEMs are located \
                         otherwise it specifies the directory where the DEMs are downloaded and the stitched DEM is generated (default: %(default)s)')
 
     parser.add_argument('-o', '--output', type = str, dest = 'output', default = None, help = 'Name of the output file to be created in --dir. If not provided the system generates one based on the bbox extremes')
