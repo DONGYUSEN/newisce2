@@ -152,6 +152,22 @@ def download_file(urls, outname, session=None):
     raise last_error
 
 
+def ensure_orbit_zip(eof_path):
+    eof_path = os.path.abspath(eof_path)
+    if eof_path.lower().endswith('.zip'):
+        return eof_path
+    if not os.path.isfile(eof_path):
+        return None
+
+    zip_path = eof_path + '.zip'
+    if os.path.isfile(zip_path):
+        return zip_path
+
+    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(eof_path, arcname=os.path.basename(eof_path))
+    return zip_path
+
+
 def download_step_orbit(session, sat_name, orbit_code, safe_start, safe_stop, outdir):
     fname, url = find_step_orbit(session, sat_name, orbit_code, safe_start, safe_stop)
     if fname is None:
@@ -163,8 +179,9 @@ def download_step_orbit(session, sat_name, orbit_code, safe_start, safe_stop, ou
 
     if fname.endswith('.zip'):
         zip_path = os.path.join(outdir, fname)
-        with open(zip_path, 'wb') as f:
-            f.write(req.content)
+        if not os.path.exists(zip_path):
+            with open(zip_path, 'wb') as f:
+                f.write(req.content)
 
         with zipfile.ZipFile(zip_path, 'r') as zf:
             eof_members = [m for m in zf.namelist() if m.endswith('.EOF')]
@@ -172,10 +189,9 @@ def download_step_orbit(session, sat_name, orbit_code, safe_start, safe_stop, ou
                 raise RuntimeError('No EOF file found inside {}'.format(zip_path))
             member = eof_members[0]
             out_eof = os.path.join(outdir, os.path.basename(member))
-            with zf.open(member) as src, open(out_eof, 'wb') as dst:
-                shutil.copyfileobj(src, dst)
-
-        os.remove(zip_path)
+            if not os.path.exists(out_eof):
+                with zf.open(member) as src, open(out_eof, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
         return out_eof
 
     outpath = os.path.join(outdir, fname)
@@ -221,14 +237,23 @@ if __name__ == '__main__':
         output = os.path.join(inps.outdir, match)
         if os.path.exists(output):
             print('Orbit already exists: ', output)
+            zip_out = ensure_orbit_zip(output)
+            if zip_out is not None:
+                print('Orbit zip cached at: ', zip_out)
         else:
             try:
                 urls = [match_base + match]
                 download_file(urls, output, session)
                 print('Saved orbit to: ', output)
+                zip_out = ensure_orbit_zip(output)
+                if zip_out is not None:
+                    print('Orbit zip cached at: ', zip_out)
             except Exception:
                 print('s1qc download failed, fallback to STEP mirror ...')
                 out = download_step_orbit(session, satName, match_code, fileTSStart, fileTS, inps.outdir)
                 print('Saved orbit to: ', out)
+                zip_out = ensure_orbit_zip(out)
+                if zip_out is not None:
+                    print('Orbit zip cached at: ', zip_out)
     else:
         print('Failed to find orbits for tref {0} ({1})'.format(fileTS, satName))

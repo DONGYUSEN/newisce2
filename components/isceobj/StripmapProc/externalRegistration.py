@@ -33,6 +33,9 @@ _DEFAULT_CONFIG = {
     'fine_window_cap_for_large_coarse': 1024,
     'fine_large_coarse_grid_size': 60,
     'fine_window': 128,
+    'fine_search_scale': 0.25,
+    'fine_search_min': 16,
+    'fine_search_max': 128,
     'fine_spacing': 128,
     'fine_quality_threshold': 0.05,
     'fine_workers': 0,
@@ -89,6 +92,22 @@ class _AmplitudeAccessor(object):
             return None
         return np.abs(patch).astype(np.float32, copy=False)
 
+    def extract_search_chip(
+        self,
+        center_row,
+        center_col,
+        template_window,
+        search_half,
+        row_shift=0.0,
+        col_shift=0.0,
+    ):
+        search_shape = _full_search_shape(template_window, search_half)
+        return self.extract_patch(
+            center_row + float(row_shift),
+            center_col + float(col_shift),
+            search_shape,
+        )
+
 
 def _normalize_slc_path(path):
     if path.endswith('.xml'):
@@ -130,14 +149,63 @@ def _read_slc_as_memmap(path):
     return np.asarray(data, dtype=np.float32).astype(np.complex64)
 
 
+def _coerce_hw_pair(value, default=None):
+    if value is None:
+        if default is None:
+            raise ValueError('Missing shape value')
+        value = default
+
+    if isinstance(value, np.ndarray):
+        items = value.tolist()
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        items = [value]
+
+    if len(items) == 0:
+        raise ValueError('Empty shape value')
+    if len(items) == 1:
+        one = int(np.rint(float(items[0])))
+        return one, one
+
+    first = int(np.rint(float(items[0])))
+    second = int(np.rint(float(items[1])))
+    return first, second
+
+
+def _positive_hw_pair(value, default=None, minimum=1):
+    hh, ww = _coerce_hw_pair(value, default=default)
+    hh = max(int(minimum), int(hh))
+    ww = max(int(minimum), int(ww))
+    return hh, ww
+
+
+def _full_search_shape(template_window, search_half):
+    win_h, win_w = _positive_hw_pair(template_window, minimum=1)
+    srch_h, srch_w = _positive_hw_pair(search_half, minimum=0)
+    return (int(win_h + 2 * srch_h), int(win_w + 2 * srch_w))
+
+
+def _result_hw_pair(result, pair_key, scalar_key):
+    pair = result.get(pair_key) or {}
+    if isinstance(pair, dict):
+        return (
+            int(pair.get('down', result.get(scalar_key, 0))),
+            int(pair.get('across', result.get(scalar_key, 0))),
+        )
+    return _positive_hw_pair(result.get(scalar_key, 0), minimum=0)
+
+
 def _extract_patch(arr, center_row, center_col, window):
-    half = int(window // 2)
+    win_h, win_w = _positive_hw_pair(window, minimum=1)
+    half_h = int(win_h // 2)
+    half_w = int(win_w // 2)
     crow = int(np.rint(center_row))
     ccol = int(np.rint(center_col))
-    r0 = crow - half
-    c0 = ccol - half
-    r1 = r0 + int(window)
-    c1 = c0 + int(window)
+    r0 = crow - half_h
+    c0 = ccol - half_w
+    r1 = r0 + int(win_h)
+    c1 = c0 + int(win_w)
 
     if r0 < 0 or c0 < 0 or r1 > arr.shape[0] or c1 > arr.shape[1]:
         return None
@@ -150,6 +218,18 @@ def _parabolic_subpixel(values, idx):
     left = float(values[(idx - 1) % n])
     center = float(values[idx])
     right = float(values[(idx + 1) % n])
+    denom = left - 2.0 * center + right
+    if abs(denom) < 1.0e-12:
+        return 0.0
+    return 0.5 * (left - right) / denom
+
+
+def _parabolic_subpixel_clamped(values, idx):
+    if idx <= 0 or idx >= (len(values) - 1):
+        return 0.0
+    left = float(values[idx - 1])
+    center = float(values[idx])
+    right = float(values[idx + 1])
     denom = left - 2.0 * center + right
     if abs(denom) < 1.0e-12:
         return 0.0
@@ -203,6 +283,105 @@ def _phase_correlation_displacement(master_amp_patch, slave_amp_patch):
     quality = _normalized_corr_centered(ma, shifted_slave)
 
     return disp_az, disp_rg, quality
+
+
+def _valid_window_sums(arr, win_h, win_w):
+    integral = np.pad(arr, ((1, 0), (1, 0)), mode='constant')
+    integral = np.cumsum(np.cumsum(integral, axis=0), axis=1)
+    return (
+        integral[win_h:, win_w:]
+        - integral[:-win_h, win_w:]
+        - integral[win_h:, :-win_w]
+        + integral[:-win_h, :-win_w]
+    )
+
+
+def _valid_cross_correlation(search_chip, template_centered):
+    hh, ww = search_chip.shape
+    th, tw = template_centered.shape
+    fft_shape = (hh + th - 1, ww + tw - 1)
+    corr_full = np.fft.irfft2(
+        np.fft.rfft2(search_chip, s=fft_shape)
+        * np.fft.rfft2(template_centered[::-1, ::-1], s=fft_shape),
+        s=fft_shape,
+    )
+    return corr_full[th - 1:hh, tw - 1:ww]
+
+
+def _search_patch_displacement(master_amp_patch, slave_search_chip, search_half):
+    search_h, search_w = _positive_hw_pair(search_half, minimum=0)
+    tmpl = np.asarray(master_amp_patch, dtype=np.float64)
+    chip = np.asarray(slave_search_chip, dtype=np.float64)
+
+    tmpl_h, tmpl_w = tmpl.shape
+    expected_shape = _full_search_shape((tmpl_h, tmpl_w), (search_h, search_w))
+    if chip.shape != expected_shape:
+        return None
+
+    tmpl_centered = tmpl - np.mean(tmpl)
+    tmpl_energy = float(np.sum(tmpl_centered * tmpl_centered))
+    if tmpl_energy <= 1.0e-12:
+        return None
+
+    numerator = _valid_cross_correlation(chip, tmpl_centered)
+    chip_sum = _valid_window_sums(chip, tmpl_h, tmpl_w)
+    chip_sum_sq = _valid_window_sums(chip * chip, tmpl_h, tmpl_w)
+    npix = float(tmpl_h * tmpl_w)
+    chip_var = chip_sum_sq - (chip_sum * chip_sum) / npix
+    valid = np.isfinite(chip_var) & (chip_var > 1.0e-12)
+    if not np.any(valid):
+        return None
+
+    corr_surface = np.full(numerator.shape, -np.inf, dtype=np.float64)
+    corr_surface[valid] = numerator[valid] / np.sqrt(tmpl_energy * chip_var[valid])
+    if not np.isfinite(np.max(corr_surface)):
+        return None
+
+    peak_row, peak_col = np.unravel_index(np.argmax(corr_surface), corr_surface.shape)
+    peak_quality = float(corr_surface[peak_row, peak_col])
+    if not np.isfinite(peak_quality):
+        return None
+
+    sub_row = _parabolic_subpixel_clamped(corr_surface[:, peak_col], int(peak_row))
+    sub_col = _parabolic_subpixel_clamped(corr_surface[peak_row, :], int(peak_col))
+
+    disp_az = (float(peak_row) + float(sub_row)) - float(search_h)
+    disp_rg = (float(peak_col) + float(sub_col)) - float(search_w)
+    return float(disp_az), float(disp_rg), peak_quality
+
+
+def _template_search_displacement(
+    master_amp,
+    slave_amp,
+    row,
+    col,
+    template_window,
+    search_half,
+    gross_az=0.0,
+    gross_rg=0.0,
+):
+    pm = master_amp.extract_patch(row, col, template_window)
+    ps = slave_amp.extract_search_chip(
+        row,
+        col,
+        template_window,
+        search_half,
+        row_shift=gross_az,
+        col_shift=gross_rg,
+    )
+    if (pm is None) or (ps is None):
+        return None
+
+    residual = _search_patch_displacement(pm, ps, search_half)
+    if residual is None:
+        return None
+
+    res_az, res_rg, quality = residual
+    return (
+        float(gross_az) + float(res_az),
+        float(gross_rg) + float(res_rg),
+        float(quality),
+    )
 
 
 def _sanitize_window_size(window, h, w, cfg):
@@ -327,6 +506,8 @@ def _coarse_candidate_windows(master_amp, cfg):
 
 def _coarse_registration_for_window(master_amp, slave_amp, window, search_range, cfg):
     h, w = master_amp.shape
+    template_hw = _positive_hw_pair(window, minimum=32)
+    search_hw = _positive_hw_pair(search_range, minimum=0)
 
     grid_size = max(3, int(cfg.get('coarse_grid_size', 3)))
     fracs = np.linspace(0.25, 0.75, grid_size, dtype=np.float64)
@@ -337,17 +518,20 @@ def _coarse_registration_for_window(master_amp, slave_amp, window, search_range,
     qualities = []
     quality_threshold = float(cfg['coarse_quality_threshold'])
     for row, col in positions:
-        pm = master_amp.extract_patch(row, col, window)
-        ps = slave_amp.extract_patch(row, col, window)
-        if (pm is None) or (ps is None):
-            continue
-        result = _phase_correlation_displacement(pm, ps)
+        result = _template_search_displacement(
+            master_amp,
+            slave_amp,
+            row,
+            col,
+            template_hw,
+            search_hw,
+        )
         if result is None:
             continue
         daz, drg, q = result
         if q < quality_threshold:
             continue
-        if max(abs(float(daz)), abs(float(drg))) > float(search_range):
+        if (abs(float(daz)) > float(search_hw[0])) or (abs(float(drg)) > float(search_hw[1])):
             continue
         az.append(daz)
         rg.append(drg)
@@ -360,6 +544,8 @@ def _coarse_registration_for_window(master_amp, slave_amp, window, search_range,
             'status': 'failed',
             'window': int(window),
             'search_range': int(search_range),
+            'template_window': {'down': int(template_hw[0]), 'across': int(template_hw[1])},
+            'search_half': {'down': int(search_hw[0]), 'across': int(search_hw[1])},
             'num_valid': int(len(az)),
             'error': 'valid windows < {0}'.format(required_valid),
         }
@@ -374,6 +560,8 @@ def _coarse_registration_for_window(master_amp, slave_amp, window, search_range,
         'status': 'ok',
         'window': int(window),
         'search_range': int(search_range),
+        'template_window': {'down': int(template_hw[0]), 'across': int(template_hw[1])},
+        'search_half': {'down': int(search_hw[0]), 'across': int(search_hw[1])},
         'num_valid': int(len(az)),
         'azimuth_offset': float(np.median(az_arr)),
         'range_offset': float(np.median(rg_arr)),
@@ -400,20 +588,26 @@ def _coarse_registration(master_amp, slave_amp, cfg, logger=None):
 
     if (logger is not None) and bool(cfg.get('coarse_log_candidates', True)):
         for r in results:
+            template_h, template_w = _result_hw_pair(r, 'template_window', 'window')
+            search_h, search_w = _result_hw_pair(r, 'search_half', 'search_range')
             if r.get('status') == 'ok':
                 logger.info(
-                    'External coarse candidate: search_range=%d window=%d valid=%d quality_median=%.5f spread=%.6f',
-                    int(r.get('search_range', 0)),
-                    int(r.get('window', 0)),
+                    'External coarse candidate: template=(%d,%d) search_half=(%d,%d) valid=%d quality_median=%.5f spread=%.6f',
+                    template_h,
+                    template_w,
+                    search_h,
+                    search_w,
                     int(r.get('num_valid', 0)),
                     float(r.get('quality_median', 0.0)),
                     float(r.get('spread', 0.0)),
                 )
             else:
                 logger.info(
-                    'External coarse candidate: search_range=%d window=%d failed (%s)',
-                    int(r.get('search_range', 0)),
-                    int(r.get('window', 0)),
+                    'External coarse candidate: template=(%d,%d) search_half=(%d,%d) failed (%s)',
+                    template_h,
+                    template_w,
+                    search_h,
+                    search_w,
                     str(r.get('error', 'unknown')),
                 )
 
@@ -481,17 +675,33 @@ def _coarse_registration(master_amp, slave_amp, cfg, logger=None):
                         ),
                     )
                     if logger is not None:
+                        best_template_h, best_template_w = _result_hw_pair(best, 'template_window', 'window')
+                        best_search_h, best_search_w = _result_hw_pair(best, 'search_half', 'search_range')
+                        balanced_template_h, balanced_template_w = _result_hw_pair(
+                            balanced,
+                            'template_window',
+                            'window',
+                        )
+                        balanced_search_h, balanced_search_w = _result_hw_pair(
+                            balanced,
+                            'search_half',
+                            'search_range',
+                        )
                         logger.info(
-                            'External coarse auto-balance switched to smaller window: '
-                            'from search_range=%d window=%d quality=%.5f spread=%.6f '
-                            'to search_range=%d window=%d quality=%.5f spread=%.6f '
+                            'External coarse auto-balance switched to smaller template/search pair: '
+                            'from template=(%d,%d) search_half=(%d,%d) quality=%.5f spread=%.6f '
+                            'to template=(%d,%d) search_half=(%d,%d) quality=%.5f spread=%.6f '
                             '(quality_margin=%.5f, spread_margin=%.5f)',
-                            int(best.get('search_range', 0)),
-                            int(best.get('window', 0)),
+                            best_template_h,
+                            best_template_w,
+                            best_search_h,
+                            best_search_w,
                             float(best.get('quality_median', 0.0)),
                             float(best.get('spread', 0.0)),
-                            int(balanced.get('search_range', 0)),
-                            int(balanced.get('window', 0)),
+                            balanced_template_h,
+                            balanced_template_w,
+                            balanced_search_h,
+                            balanced_search_w,
                             float(balanced.get('quality_median', 0.0)),
                             float(balanced.get('spread', 0.0)),
                             quality_margin,
@@ -524,11 +734,15 @@ def _coarse_registration(master_amp, slave_amp, cfg, logger=None):
         selection_mode = 'quality_fallback'
 
     if (logger is not None) and bool(cfg.get('coarse_log_candidates', True)):
+        best_template_h, best_template_w = _result_hw_pair(best, 'template_window', 'window')
+        best_search_h, best_search_w = _result_hw_pair(best, 'search_half', 'search_range')
         logger.info(
-            'External coarse selected: mode=%s search_range=%d window=%d valid=%d quality_median=%.5f spread=%.6f az=%.4f rg=%.4f',
+            'External coarse selected: mode=%s template=(%d,%d) search_half=(%d,%d) valid=%d quality_median=%.5f spread=%.6f az=%.4f rg=%.4f',
             selection_mode,
-            int(best.get('search_range', 0)),
-            int(best.get('window', 0)),
+            best_template_h,
+            best_template_w,
+            best_search_h,
+            best_search_w,
             int(best.get('num_valid', 0)),
             float(best.get('quality_median', 0.0)),
             float(best.get('spread', 0.0)),
@@ -543,6 +757,8 @@ def _coarse_registration(master_amp, slave_amp, cfg, logger=None):
                 'search_range': int(r.get('search_range', 0)),
                 'requested_search_range': int(r.get('requested_search_range', r.get('search_range', 0))),
                 'window': int(r.get('window', 0)),
+                'template_window': dict(r.get('template_window') or {}),
+                'search_half': dict(r.get('search_half') or {}),
                 'window_scale': float(r.get('window_scale', cfg.get('coarse_window_scale', 4.0))),
                 'status': str(r.get('status', 'failed')),
                 'num_valid': int(r.get('num_valid', 0)),
@@ -569,6 +785,8 @@ def _coarse_registration(master_amp, slave_amp, cfg, logger=None):
         ),
         'search_range': int(best.get('search_range', 0)),
         'requested_search_range': int(best.get('requested_search_range', best.get('search_range', 0))),
+        'template_window': dict(best.get('template_window') or {}),
+        'search_half': dict(best.get('search_half') or {}),
         'qualities': [float(v) for v in best['qualities']],
         'window_size': int(best['window']),
         'window_scale': float(best.get('window_scale', cfg.get('coarse_window_scale', 4.0))),
@@ -606,30 +824,53 @@ def _iter_uniform_grid_points(height, width, margin, rows_count, cols_count):
     return [(float(r), float(c)) for r in rows for c in cols]
 
 
-def _evaluate_fine_point(master_amp, slave_amp, row, col, coarse_az, coarse_rg, window, quality_threshold):
-    pm = master_amp.extract_patch(row, col, window)
-    ps = slave_amp.extract_patch(row + coarse_az, col + coarse_rg, window)
-    if (pm is None) or (ps is None):
-        return None
-
-    result = _phase_correlation_displacement(pm, ps)
+def _evaluate_fine_point(
+    master_amp,
+    slave_amp,
+    row,
+    col,
+    coarse_az,
+    coarse_rg,
+    template_window,
+    search_half,
+    quality_threshold,
+):
+    result = _template_search_displacement(
+        master_amp,
+        slave_amp,
+        row,
+        col,
+        template_window,
+        search_half,
+        gross_az=coarse_az,
+        gross_rg=coarse_rg,
+    )
     if result is None:
         return None
 
-    residual_az, residual_rg, quality = result
+    total_az, total_rg, quality = result
     if quality < quality_threshold:
         return None
 
     return {
         'row': float(row),
         'col': float(col),
-        'azimuth': float(coarse_az + residual_az),
-        'range': float(coarse_rg + residual_rg),
+        'azimuth': float(total_az),
+        'range': float(total_rg),
         'quality': float(quality),
     }
 
 
-def _fine_registration(master_amp, slave_amp, coarse_az, coarse_rg, cfg, coarse_window=None, logger=None):
+def _fine_registration(
+    master_amp,
+    slave_amp,
+    coarse_az,
+    coarse_rg,
+    cfg,
+    coarse_window=None,
+    coarse_search=None,
+    logger=None,
+):
     h, w = master_amp.shape
 
     requested_window = int(cfg['fine_window'])
@@ -655,8 +896,24 @@ def _fine_registration(master_amp, slave_amp, coarse_az, coarse_rg, cfg, coarse_
         if window % 2 != 0:
             window -= 1
 
+    if coarse_search is None:
+        coarse_search_h = int(cfg.get('fine_search_max', 128))
+        coarse_search_w = int(cfg.get('fine_search_max', 128))
+    else:
+        coarse_search_h, coarse_search_w = _positive_hw_pair(coarse_search, minimum=1)
+    fine_search_scale = float(cfg.get('fine_search_scale', 0.25))
+    fine_search_min = max(0, int(cfg.get('fine_search_min', 16)))
+    fine_search_max = max(fine_search_min, int(cfg.get('fine_search_max', 128)))
+    search_h = max(fine_search_min, min(fine_search_max, int(np.rint(coarse_search_h * fine_search_scale))))
+    search_w = max(fine_search_min, min(fine_search_max, int(np.rint(coarse_search_w * fine_search_scale))))
+    search_half = (search_h, search_w)
+
     spacing = max(16, int(cfg['fine_spacing']))
-    margin = (window // 2) + max(abs(int(np.rint(coarse_az))), abs(int(np.rint(coarse_rg)))) + 2
+    margin = (
+        max(window // 2, search_h, search_w)
+        + max(abs(int(np.rint(coarse_az))), abs(int(np.rint(coarse_rg))))
+        + 2
+    )
     max_points = int(cfg.get('max_points', 0))
     unlimited_points = (max_points <= 0)
     quality_threshold = float(cfg['fine_quality_threshold'])
@@ -684,9 +941,12 @@ def _fine_registration(master_amp, slave_amp, coarse_az, coarse_rg, cfg, coarse_
 
     if logger is not None:
         logger.info(
-            'External fine registration config bridged from coarse: coarse_window=%d effective_fine_window=%d grid_mode=%s',
+            'External fine registration config bridged from coarse: coarse_template=%d fine_template=(%d,%d) search_half=(%d,%d) grid_mode=%s',
             int(requested_window),
             int(window),
+            int(window),
+            int(search_h),
+            int(search_w),
             grid_mode,
         )
     if (logger is not None) and (workers > 1):
@@ -708,7 +968,8 @@ def _fine_registration(master_amp, slave_amp, coarse_az, coarse_rg, cfg, coarse_
                 col,
                 coarse_az,
                 coarse_rg,
-                window,
+                (window, window),
+                search_half,
                 quality_threshold,
             )
             if one is not None:
@@ -729,7 +990,8 @@ def _fine_registration(master_amp, slave_amp, coarse_az, coarse_rg, cfg, coarse_
                     cols,
                     repeat(coarse_az),
                     repeat(coarse_rg),
-                    repeat(window),
+                    repeat((window, window)),
+                    repeat(search_half),
                     repeat(quality_threshold),
                 )
                 for one in results:
@@ -922,6 +1184,7 @@ def estimate_misregistration_polys(
         coarse_rg=coarse['range_offset'],
         cfg=cfg,
         coarse_window=coarse.get('window_size'),
+        coarse_search=coarse.get('search_range'),
         logger=logger,
     )
     model = _fit_model(points, cfg)

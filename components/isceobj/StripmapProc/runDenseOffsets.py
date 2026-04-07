@@ -8,7 +8,7 @@ from isceobj.Util.decorators import use_api
 from isceobj.StripmapProc.externalRegistration import (
     _read_slc_as_memmap,
     _AmplitudeAccessor,
-    _phase_correlation_displacement,
+    _template_search_displacement,
 )
 import os
 import logging
@@ -92,7 +92,9 @@ def _compute_dense_layout(width, length, ww, wh, sw, shh, kw, kh, margin):
 
 def _dense_grid_definition(width, length, ww, wh, sw, shh, kw, kh, margin):
     if kw <= 0 or kh <= 0:
-        raise ValueError('Dense skip must be positive: skip=(%d,%d)' % (kw, kh))
+        raise ValueError(
+            'Dense sampling stride must be positive: sampling_stride=(%d,%d)' % (kh, kw)
+        )
 
     # Keep formula consistent with DenseAmpcor.denseampcor().
     coarseAcross = 0
@@ -224,9 +226,9 @@ def estimateOffsetFieldExternal(reference, secondary, denseOffsetFileName,
         )
 
     logger.info(
-        'External dense offsets config: window=(%d,%d), search=(%d,%d), skip=(%d,%d), '
-        'margin=%d, workers=%d, quality_threshold=%.3f, grid=(%d,%d)',
-        int(ww), int(wh), int(sw), int(shh), int(kw), int(kh),
+        'External dense offsets config: template_window=(%d,%d), search_half=(%d,%d), '
+        'sampling_stride=(%d,%d), margin=%d, workers=%d, quality_threshold=%.3f, grid=(%d,%d)',
+        int(wh), int(ww), int(shh), int(sw), int(kh), int(kw),
         int(margin), int(workers), float(quality_threshold), num_down, num_across
     )
 
@@ -238,11 +240,14 @@ def estimateOffsetFieldExternal(reference, secondary, denseOffsetFileName,
     cov3 = np.full((num_down, num_across), 999.0, dtype=np.float32)
 
     def _evaluate_point(row, col):
-        pm = master_amp.extract_patch(row, col, ww)
-        ps = slave_amp.extract_patch(row, col, ww)
-        if (pm is None) or (ps is None):
-            return None
-        result = _phase_correlation_displacement(pm, ps)
+        result = _template_search_displacement(
+            master_amp,
+            slave_amp,
+            row,
+            col,
+            (int(wh), int(ww)),
+            (int(shh), int(sw)),
+        )
         if result is None:
             return None
         daz, drg, q = result
@@ -446,9 +451,9 @@ def estimateOffsetField(reference, secondary, denseOffsetFileName,
     objOffset.covImageName = denseOffsetFileName + '_cov.bil'
 
     logger.info(
-        'DenseAmpcor config: window=(%d,%d), search=(%d,%d), skip=(%d,%d), '
-        'margin=%d, cov_threshold=%.3f, threads=%d',
-        ww, wh, sw, shh, kw, kh, objOffset.margin, float(covth), int(objOffset.numberThreads)
+        'DenseAmpcor config: template_window=(%d,%d), search_half=(%d,%d), '
+        'sampling_stride=(%d,%d), margin=%d, cov_threshold=%.3f, threads=%d',
+        wh, ww, shh, sw, kh, kw, objOffset.margin, float(covth), int(objOffset.numberThreads)
     )
     objOffset.denseampcor(sar, sim)
 
@@ -531,8 +536,9 @@ def estimateOffsetFieldGPU(reference, secondary, denseOffsetFileName,
     objOffset.mergeGrossOffset = 1
 
     logger.info(
-        'PyCuAmpcor config: window=(%d,%d), search=(%d,%d), skip=(%d,%d), margin=%d, windows=(%d,%d)',
-        ww, wh, sw, shh, kw, kh, margin, number_window_down, number_window_across
+        'PyCuAmpcor config: template_window=(%d,%d), search_half=(%d,%d), '
+        'sampling_stride=(%d,%d), margin=%d, grid=(%d,%d)',
+        wh, ww, shh, sw, kh, kw, margin, number_window_down, number_window_across
     )
     objOffset.setupParams()
     objOffset.setConstantGrossOffset(gross_offset_across, gross_offset_down)

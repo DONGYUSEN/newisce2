@@ -6,8 +6,10 @@
 
 import os, glob, sys
 import datetime
+import zipfile
 
-DEFAULT_S1_ORBIT_CACHE_DIR = '/Work/s1oribt'
+DEFAULT_S1_ORBIT_CACHE_DIR = '/Work/s1orbit'
+LEGACY_S1_ORBIT_CACHE_DIR = '/Work/s1oribt'
 S1_ORBIT_CACHE_ENV = 'ISCE_S1_ORBIT_CACHE_DIR'
 
 
@@ -1909,20 +1911,60 @@ class sentinelSLC(object):
             search_dirs.append(orbitDir)
         if cacheOrbitDir and cacheOrbitDir not in search_dirs:
             search_dirs.append(cacheOrbitDir)
+        if os.path.isdir(LEGACY_S1_ORBIT_CACHE_DIR) and LEGACY_S1_ORBIT_CACHE_DIR not in search_dirs:
+            search_dirs.append(LEGACY_S1_ORBIT_CACHE_DIR)
+
+        def _parse_orbit_dates(orbit_name):
+            fields = orbit_name.split('_')
+            if len(fields) < 8:
+                raise ValueError('Unexpected orbit filename: {}'.format(orbit_name))
+            start = datetime.datetime.strptime(fields[6].replace('V', ''), datefmt)
+            stop_txt = fields[7].replace('.EOF', '').replace('.zip', '')
+            stop = datetime.datetime.strptime(stop_txt, datefmt)
+            return start, stop
+
+        def _materialize_orbit_file(orbit_path):
+            orbit_path = os.path.abspath(orbit_path)
+            if not orbit_path.lower().endswith('.zip'):
+                return orbit_path
+
+            with zipfile.ZipFile(orbit_path, 'r') as zf:
+                eof_members = [m for m in zf.namelist() if m.endswith('.EOF')]
+                if len(eof_members) == 0:
+                    raise RuntimeError('No .EOF member found in orbit archive {}'.format(orbit_path))
+                member = eof_members[0]
+
+                target_dir = os.path.dirname(orbit_path)
+                target_path = os.path.join(target_dir, os.path.basename(member))
+                if os.path.exists(target_path):
+                    return os.path.abspath(target_path)
+
+                try:
+                    with zf.open(member) as src, open(target_path, 'wb') as dst:
+                        dst.write(src.read())
+                    return os.path.abspath(target_path)
+                except Exception:
+                    fallback_dir = os.path.join(workDir, 'orbits', self.date)
+                    os.makedirs(fallback_dir, exist_ok=True)
+                    fallback_path = os.path.join(fallback_dir, os.path.basename(member))
+                    with zf.open(member) as src, open(fallback_path, 'wb') as dst:
+                        dst.write(src.read())
+                    return os.path.abspath(fallback_path)
 
         def _find_matching_orbit(dirname, apply_margin=True):
             if not dirname:
                 return None
             orbit_files = glob.glob(os.path.join(dirname, self.platform + '*.EOF'))
+            orbit_files.extend(glob.glob(os.path.join(dirname, self.platform + '*.EOF.zip')))
             if len(orbit_files) == 0:
                 orbit_files = glob.glob(os.path.join(dirname, '*/{0}*.EOF'.format(self.platform)))
+                orbit_files.extend(glob.glob(os.path.join(dirname, '*/{0}*.EOF.zip'.format(self.platform))))
 
             for orbit_path in orbit_files:
                 orbit = os.path.basename(orbit_path)
                 fields = orbit.split('_')
                 try:
-                    orbit_start_date_time = datetime.datetime.strptime(fields[6].replace('V', ''), datefmt)
-                    orbit_stop_date_time = datetime.datetime.strptime(fields[7].replace('.EOF', ''), datefmt)
+                    orbit_start_date_time, orbit_stop_date_time = _parse_orbit_dates(orbit)
                 except Exception:
                     continue
 
@@ -1937,7 +1979,7 @@ class sentinelSLC(object):
         for directory in search_dirs:
             match_orbit = _find_matching_orbit(directory, apply_margin=True)
             if match_orbit is not None:
-                self.orbit = os.path.abspath(match_orbit)
+                self.orbit = _materialize_orbit_file(match_orbit)
                 self.orbitType = 'precise' if 'AUX_POEORB' in os.path.basename(match_orbit) else 'restituted'
                 return
 
@@ -1952,7 +1994,7 @@ class sentinelSLC(object):
         match_orbit = _find_matching_orbit(downloadOrbitDir, apply_margin=False)
         if match_orbit is not None:
             print ("restituted or precise orbit already exists.")
-            self.orbit = os.path.abspath(match_orbit)
+            self.orbit = _materialize_orbit_file(match_orbit)
             self.orbitType = 'precise' if 'AUX_POEORB' in os.path.basename(match_orbit) else 'restituted'
             return
 
@@ -1964,7 +2006,7 @@ class sentinelSLC(object):
         if match_orbit is None:
             raise RuntimeError('Failed to download matching orbit into {0}'.format(downloadOrbitDir))
 
-        self.orbit = os.path.abspath(match_orbit)
+        self.orbit = _materialize_orbit_file(match_orbit)
         self.orbitType = 'precise' if 'AUX_POEORB' in os.path.basename(match_orbit) else 'restituted'
 
 # an example for writing job files when using clusters

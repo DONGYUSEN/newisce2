@@ -34,10 +34,50 @@ import sys
 import os
 import argparse
 import subprocess
+import glob
+import shutil
 from contrib.demUtils import createDemStitcher
 
 STEP_SRTMGL1_URL = 'https://step.esa.int/auxdata/dem/SRTMGL1'
 DEFAULT_DEM_CACHE_DIR = os.environ.get('ISCE_DEM_CACHE_DIR', '/Work/dem')
+
+
+def _parse_bool_env(name, default):
+    val = os.environ.get(name)
+    if val is None:
+        return bool(default)
+    return str(val).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _archive_dem_zip_files(source_dir, cache_dir):
+    if (not source_dir) or (not cache_dir):
+        return 0
+
+    source_dir = os.path.abspath(source_dir)
+    cache_dir = os.path.abspath(cache_dir)
+    if (source_dir == cache_dir) or (not os.path.isdir(cache_dir)) or (not os.path.isdir(source_dir)):
+        return 0
+
+    moved = 0
+    patterns = ('*hgt.zip', '*.hgt.zip', '*HGT.zip', '*.HGT.zip')
+    for pattern in patterns:
+        for src in glob.glob(os.path.join(source_dir, '**', pattern), recursive=True):
+            if not os.path.isfile(src):
+                continue
+            dst = os.path.join(cache_dir, os.path.basename(src))
+            try:
+                if os.path.exists(dst):
+                    if os.path.getsize(dst) == os.path.getsize(src):
+                        os.remove(src)
+                    else:
+                        os.replace(src, dst)
+                    moved += 1
+                else:
+                    shutil.move(src, dst)
+                    moved += 1
+            except Exception:
+                continue
+    return moved
 
 
 def _refresh_isce_metadata(dem_path):
@@ -219,6 +259,14 @@ def main():
     ds = createDemStitcher(args.type)
     ds.configure()
 
+    # Cache mode: when target dir exists (e.g. /Work/dem), keep downloaded
+    # tile archives by default so next runs can reuse them.
+    shared_zip_cache_exists = os.path.isdir(DEFAULT_DEM_CACHE_DIR)
+    auto_keep_zip = os.path.isdir(args.dir) or shared_zip_cache_exists
+    keep_zip = _parse_bool_env('ISCE_DEM_KEEP_ZIP', auto_keep_zip)
+    if keep_zip:
+        args.keep = True
+
     #NASADEM only available in 1-arc sec resolution
     if(args.type == 'nasadem'):
         args.source == 1
@@ -302,6 +350,11 @@ def main():
     else:
         print('Unrecognized action -a or --action',args.action)
         return
+
+    # If shared cache exists, move downloaded tile archives there.
+    zip_moved = _archive_dem_zip_files(args.dir, DEFAULT_DEM_CACHE_DIR)
+    if zip_moved > 0:
+        print('Archived DEM zip tiles to {}: {}'.format(DEFAULT_DEM_CACHE_DIR, zip_moved))
 
     if(args.report):
         for k,v in list(ds._downloadReport.items()):

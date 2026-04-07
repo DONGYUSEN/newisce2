@@ -87,8 +87,8 @@ void cuAmpcorParameter::setupParameters()
     windowSizeWidth = windowSizeWidthRaw*rawDataOversamplingFactor;  //
     windowSizeHeight = windowSizeHeightRaw*rawDataOversamplingFactor;
 
-    searchWindowSizeWidthRaw =  windowSizeWidthRaw + 2*halfSearchRangeDownRaw;
-    searchWindowSizeHeightRaw = windowSizeHeightRaw + 2*halfSearchRangeAcrossRaw;
+    searchWindowSizeWidthRaw =  windowSizeWidthRaw + 2*halfSearchRangeAcrossRaw;
+    searchWindowSizeHeightRaw = windowSizeHeightRaw + 2*halfSearchRangeDownRaw;
 
     searchWindowSizeWidthRawZoomIn = windowSizeWidthRaw + 2*halfZoomWindowSizeRaw;
     searchWindowSizeHeightRawZoomIn = windowSizeHeightRaw + 2*halfZoomWindowSizeRaw;

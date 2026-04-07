@@ -10,11 +10,16 @@ import os, sys, glob
 import argparse
 import configparser
 import datetime
+import math
+import subprocess
 import numpy as np
 import isce
 import isceobj
 from isceobj.Sensor.TOPS.Sentinel1 import Sentinel1
 from Stack import config, run, sentinelSLC
+
+DEFAULT_DEM_CACHE_DIR = '/Work/dem'
+DEM_CACHE_ENV = 'ISCE_DEM_CACHE_DIR'
 
 helpstr= '''
 
@@ -43,6 +48,127 @@ class customArgparseAction(argparse.Action):
         '''
         print(helpstr)
         parser.exit()
+
+
+def _strip_dem_suffix(path):
+    if path.endswith('.xml') or path.endswith('.vrt'):
+        return path[:-4]
+    return path
+
+
+def _dem_exists(path):
+    base = _strip_dem_suffix(path)
+    return os.path.isfile(base) or os.path.isfile(base + '.xml') or os.path.isfile(base + '.vrt')
+
+
+def _dem_hint_names(dem_hint):
+    base = os.path.basename(_strip_dem_suffix(dem_hint))
+    if not base:
+        return []
+    names = [base]
+    if base.endswith('.wgs84'):
+        names.append(base[:-6])
+    else:
+        names.append(base + '.wgs84')
+    out = []
+    seen = set()
+    for one in names:
+        if one and one not in seen:
+            seen.add(one)
+            out.append(one)
+    return out
+
+
+def _find_dem_in_dir(search_dir, dem_hint):
+    if (not search_dir) or (not os.path.isdir(search_dir)):
+        return None
+
+    for name in _dem_hint_names(dem_hint):
+        direct = os.path.join(search_dir, name)
+        if _dem_exists(direct):
+            return os.path.abspath(_strip_dem_suffix(direct))
+
+    for name in _dem_hint_names(dem_hint):
+        for suffix in ('', '.xml', '.vrt'):
+            pattern = os.path.join(search_dir, '**', name + suffix)
+            matches = sorted(glob.glob(pattern, recursive=True))
+            for m in matches:
+                if _dem_exists(m):
+                    return os.path.abspath(_strip_dem_suffix(m))
+    return None
+
+
+def _fallback_cached_dem(search_dir):
+    if (not search_dir) or (not os.path.isdir(search_dir)):
+        return None
+    patterns = ('*.dem.wgs84', '*.dem', '*.hgt')
+    matches = []
+    for pat in patterns:
+        matches.extend(glob.glob(os.path.join(search_dir, '**', pat), recursive=True))
+    matches = [m for m in matches if _dem_exists(m)]
+    if not matches:
+        return None
+    matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return os.path.abspath(_strip_dem_suffix(matches[0]))
+
+
+def _resolve_dem_path_with_cache_and_download(dem_hint, bbox_txt):
+    primary = os.path.abspath(_strip_dem_suffix(dem_hint))
+    if _dem_exists(primary):
+        return primary
+
+    cache_dir = os.environ.get(DEM_CACHE_ENV, DEFAULT_DEM_CACHE_DIR)
+    cached = _find_dem_in_dir(cache_dir, primary)
+    if cached is not None:
+        print('Using cached DEM: ' + cached)
+        return cached
+
+    if bbox_txt is None:
+        raise RuntimeError(
+            'DEM not found at requested path ({0}) and no cached DEM in {1}; '
+            'bbox is required for auto-download.'.format(primary, cache_dir)
+        )
+
+    bbox_vals = [float(val) for val in str(bbox_txt).split()]
+    if len(bbox_vals) != 4:
+        raise RuntimeError('Invalid bbox for DEM auto-download: {0}'.format(str(bbox_txt)))
+
+    south = int(math.floor(min(bbox_vals[0], bbox_vals[1])))
+    north = int(math.ceil(max(bbox_vals[0], bbox_vals[1])))
+    west = int(math.floor(min(bbox_vals[2], bbox_vals[3])))
+    east = int(math.ceil(max(bbox_vals[2], bbox_vals[3])))
+
+    os.makedirs(cache_dir, exist_ok=True)
+    output_name = os.path.basename(primary)
+    output_name = _strip_dem_suffix(output_name)
+    if output_name.endswith('.wgs84'):
+        output_name = output_name[:-6]
+
+    cmd = [
+        'dem.py',
+        '-a', 'stitch',
+        '-b', str(south), str(north), str(west), str(east),
+        '-r',
+        '-s', '1',
+        '-c',
+        '-d', cache_dir,
+    ]
+    if output_name:
+        cmd.extend(['-o', output_name])
+
+    print('DEM not found in requested/cache paths; downloading to cache: {0}'.format(cache_dir))
+    print(' '.join(cmd))
+    proc = subprocess.run(cmd, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError('DEM auto-download failed with return code {0}'.format(proc.returncode))
+
+    cached = _find_dem_in_dir(cache_dir, primary)
+    if cached is None:
+        cached = _fallback_cached_dem(cache_dir)
+    if cached is None:
+        raise RuntimeError('DEM auto-download finished but no DEM found in cache dir {0}'.format(cache_dir))
+    print('Using downloaded DEM: ' + cached)
+    return cached
 
 
 def createParser():
@@ -249,6 +375,7 @@ def slcSimple(inps, acquisitionDates, safe_dict, mergeSLC=False):
 def main(iargs=None):
 
     inps = cmdLineParse(iargs)
+    inps.dem = _resolve_dem_path_with_cache_and_download(inps.dem, inps.bbox)
 
     if os.path.exists(os.path.join(inps.work_dir, 'run_files')):
         print('')
