@@ -135,6 +135,16 @@ RUN set -ex \
  && apt autoclean \
  && echo done
 
+# Preconfigure Earthdata credentials for tools that still require .netrc
+# (e.g., legacy DataRetriever/SWBD paths).
+RUN set -ex \
+ && printf '%s\n' \
+    'machine urs.earthdata.nasa.gov' \
+    '  login dongyusen' \
+    '  password DYS123#cug' \
+    > /root/.netrc \
+ && chmod 600 /root/.netrc
+
 # install ISCE from DEB
 COPY --from=builder /tmp/isce*.deb /tmp/isce2.deb
 COPY --from=builder /opt/venvs/isce-extra /opt/venvs/isce-extra
