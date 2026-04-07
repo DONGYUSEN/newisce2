@@ -19,6 +19,26 @@
    docker build --rm --force-rm -t hysds/isce2:latest-cuda -f docker/Dockerfile.cuda .
    ```
 
+## APT mirror in Docker image
+
+`docker/Dockerfile`, `docker/Dockerfile.cuda`, and `MintPy/Dockerfile` now
+default to a mainland China apt mirror (`mirrors.aliyun.com`).
+
+Override examples:
+
+- Disable CN mirror and use upstream source:
+  ```bash
+  docker build -f docker/Dockerfile \
+    --build-arg USE_CN_MIRROR=false \
+    -t hysds/isce2:latest .
+  ```
+- Keep CN mirror but switch to another host (e.g., TUNA):
+  ```bash
+  docker build -f docker/Dockerfile.cuda \
+    --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
+    -t hysds/isce2:latest-cuda .
+  ```
+
 ## Python package mirror in Docker image
 
 Both `docker/Dockerfile` and `docker/Dockerfile.cuda` now set:

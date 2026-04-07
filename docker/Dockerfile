@@ -4,12 +4,23 @@ FROM ubuntu:22.04 AS builder
 ENV LANG=en_US.UTF-8
 ENV TZ=Asia/Shanghai
 ARG DEBIAN_FRONTEND=noninteractive
+ARG USE_CN_MIRROR=true
+ARG APT_MIRROR=mirrors.aliyun.com
 
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
-RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+RUN if [ "${USE_CN_MIRROR}" = "true" ]; then \
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|https://${APT_MIRROR}/ubuntu|g" "$f"; \
+        sed -i "s|https://archive.ubuntu.com/ubuntu|https://${APT_MIRROR}/ubuntu|g" "$f"; \
+        sed -i "s|http://security.ubuntu.com/ubuntu|https://${APT_MIRROR}/ubuntu|g" "$f"; \
+        sed -i "s|https://security.ubuntu.com/ubuntu|https://${APT_MIRROR}/ubuntu|g" "$f"; \
+        sed -i "s|http://ports.ubuntu.com/ubuntu-ports|https://${APT_MIRROR}/ubuntu-ports|g" "$f"; \
+        sed -i "s|https://ports.ubuntu.com/ubuntu-ports|https://${APT_MIRROR}/ubuntu-ports|g" "$f"; \
+      done; \
+    fi
 
 RUN set -ex \
  && apt-get update \
@@ -84,8 +95,22 @@ FROM ubuntu:22.04
 ENV LANG=en_US.UTF-8
 ENV TZ=US/Pacific
 ARG DEBIAN_FRONTEND=noninteractive
+ARG USE_CN_MIRROR=true
+ARG APT_MIRROR=mirrors.aliyun.com
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+
+RUN if [ "${USE_CN_MIRROR}" = "true" ]; then \
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|https://${APT_MIRROR}/ubuntu|g" "$f"; \
+        sed -i "s|https://archive.ubuntu.com/ubuntu|https://${APT_MIRROR}/ubuntu|g" "$f"; \
+        sed -i "s|http://security.ubuntu.com/ubuntu|https://${APT_MIRROR}/ubuntu|g" "$f"; \
+        sed -i "s|https://security.ubuntu.com/ubuntu|https://${APT_MIRROR}/ubuntu|g" "$f"; \
+        sed -i "s|http://ports.ubuntu.com/ubuntu-ports|https://${APT_MIRROR}/ubuntu-ports|g" "$f"; \
+        sed -i "s|https://ports.ubuntu.com/ubuntu-ports|https://${APT_MIRROR}/ubuntu-ports|g" "$f"; \
+      done; \
+    fi
 
 RUN set -ex \
  && apt-get update \
