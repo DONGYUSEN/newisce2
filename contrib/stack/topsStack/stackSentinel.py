@@ -26,9 +26,37 @@ def _has_gpu_support():
     try:
         from zerodop.GPUtopozero.GPUtopozero import PyTopozero
         from zerodop.GPUgeo2rdr.GPUgeo2rdr import PyGeo2rdr
-        return True
+        modules_ok = True
     except Exception:
+        modules_ok = False
+
+    if not modules_ok:
         return False
+
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        try:
+            count = int(pynvml.nvmlDeviceGetCount())
+        finally:
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:
+                pass
+        return count > 0
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(
+            ['nvidia-smi', '-L'],
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            timeout=5,
+        )
+        return any(line.strip().startswith('GPU ') for line in out.splitlines())
+    except Exception:
+        return True
 
 
 def _strip_dem_suffix(path):

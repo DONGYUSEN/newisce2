@@ -74,7 +74,7 @@ def _estimate_bbox_from_outputs(lat_filename, lon_filename, width, length):
 
 
 def runTopo(self):
-    use_gpu = bool(getattr(self, 'useGPU', False))
+    use_gpu = bool(getattr(self, 'useGPU', True))
     if use_gpu and _gpu_topo_available():
         try:
             return runTopoGPU(self)

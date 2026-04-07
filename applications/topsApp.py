@@ -453,7 +453,7 @@ OFFSET_GEOCODE_LIST = Application.Parameter(
 USE_GPU = Application.Parameter(
         'useGPU',
         public_name='use GPU',
-        default=False,
+        default=True,
         type=bool,
         mandatory=False,
         doc='Allow App to use GPU when available')

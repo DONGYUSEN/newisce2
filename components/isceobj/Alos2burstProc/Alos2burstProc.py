@@ -4,6 +4,7 @@
 #
 
 import os
+import subprocess
 import logging
 import logging.config
 from iscesys.Component.Component import Component
@@ -1094,16 +1095,41 @@ class Alos2burstProc(Component):
 
     def hasGPU(self):
         '''
-        Determine if GPU modules are available.
+        Determine if GPU modules and a GPU device are available.
         '''
 
-        flag = False
+        modules_ok = False
         try:
             from zerodop.GPUtopozero.GPUtopozero import PyTopozero
             from zerodop.GPUgeo2rdr.GPUgeo2rdr import PyGeo2rdr
-            flag = True
+            modules_ok = True
         except:
             pass
 
-        return flag
+        if not modules_ok:
+            return False
 
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            try:
+                count = int(pynvml.nvmlDeviceGetCount())
+            finally:
+                try:
+                    pynvml.nvmlShutdown()
+                except Exception:
+                    pass
+            return count > 0
+        except Exception:
+            pass
+
+        try:
+            out = subprocess.check_output(
+                ['nvidia-smi', '-L'],
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                timeout=5,
+            )
+            return any(line.strip().startswith('GPU ') for line in out.splitlines())
+        except Exception:
+            return True

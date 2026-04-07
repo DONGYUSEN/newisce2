@@ -6,6 +6,7 @@
 
 from __future__ import print_function
 import os
+import subprocess
 import logging
 import logging.config
 from iscesys.Component.Component import Component
@@ -533,16 +534,44 @@ class StripmapProc(Component, FrameMixin):
 
     def hasGPU(self):
         '''
-        Determine if stripmap GPU modules are available.
+        Determine if stripmap GPU modules and a GPU device are available.
         '''
-        flag = False
+        modules_ok = False
         try:
             from contrib.PyCuAmpcor import PyCuAmpcor  # noqa: F401
-            flag = True
+            modules_ok = True
         except Exception:
             pass
 
-        return flag
+        if not modules_ok:
+            return False
+
+        # Prefer runtime device check so "default useGPU" can safely fall back to CPU.
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            try:
+                count = int(pynvml.nvmlDeviceGetCount())
+            finally:
+                try:
+                    pynvml.nvmlShutdown()
+                except Exception:
+                    pass
+            return count > 0
+        except Exception:
+            pass
+
+        try:
+            out = subprocess.check_output(
+                ['nvidia-smi', '-L'],
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                timeout=5,
+            )
+            return any(line.strip().startswith('GPU ') for line in out.splitlines())
+        except Exception:
+            # If device probing is unavailable, keep previous behavior and let runtime handle fallback.
+            return True
 
     def getReferenceFrame(self):
         return self._referenceFrame

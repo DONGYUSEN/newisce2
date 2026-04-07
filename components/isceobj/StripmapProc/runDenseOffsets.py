@@ -677,8 +677,8 @@ def runDenseOffsets(self):
 
     field = None
     external_dense_enabled = _safe_bool_env('ISCE_DENSE_EXTERNAL_ENABLED', True)
-    use_gpu_raw = getattr(self, 'useGPU', False)
-    use_gpu = _safe_bool(use_gpu_raw, default=False)
+    use_gpu_raw = getattr(self, 'useGPU', True)
+    use_gpu = _safe_bool(use_gpu_raw, default=True)
     logger.info(
         'Dense offsets useGPU raw=%r (type=%s) parsed=%s',
         use_gpu_raw, type(use_gpu_raw).__name__, use_gpu

@@ -129,7 +129,7 @@ USE_VIRTUAL_FILE = Application.Parameter('useVirtualFile',
 
 USE_GPU = Application.Parameter('useGPU',
                                 public_name='use GPU',
-                                default=False,
+                                default=True,
                                 type=bool,
                                 mandatory=False,
                                 doc='Allow App to use GPU when available')

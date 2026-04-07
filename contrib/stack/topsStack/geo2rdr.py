@@ -5,6 +5,7 @@ import os
 import sys
 import argparse
 import datetime
+import subprocess
 import numpy as np
 
 import isce
@@ -216,11 +217,35 @@ def main(iargs=None):
     except:
         pass
 
+    if run_GPU:
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            try:
+                run_GPU = int(pynvml.nvmlDeviceGetCount()) > 0
+            finally:
+                try:
+                    pynvml.nvmlShutdown()
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                out = subprocess.check_output(
+                    ['nvidia-smi', '-L'],
+                    stderr=subprocess.STDOUT,
+                    universal_newlines=True,
+                    timeout=5,
+                )
+                run_GPU = any(line.strip().startswith('GPU ') for line in out.splitlines())
+            except Exception:
+                # Keep module-based decision if runtime probing is unavailable.
+                pass
+
     if inps.useGPU is None:
         inps.useGPU = run_GPU
 
     if inps.useGPU and not run_GPU:
-        print("GPU mode requested but no GPU ISCE code found")
+        print("GPU mode requested but no usable GPU detected; fallback to CPU mode")
 
     # setting the respective version of geo2rdr for CPU and GPU
     use_gpu_runtime = run_GPU and inps.useGPU

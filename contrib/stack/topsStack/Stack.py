@@ -159,6 +159,10 @@ class config(object):
         self.f.write('secondary : ' + self.secondaryDir + '\n')
         self.f.write('out_range : ' + self.misregFile + '\n')
         self.f.write('snr_threshold : ' + self.snrThreshold + '\n')
+        if self.useGPU:
+            self.f.write('useGPU : True \n')
+        else:
+            self.f.write('useGPU : False\n')
 
     def mergeBurst(self, function):
 

@@ -57,7 +57,7 @@ def _iter_orbit_state_vectors(orbit):
 
 
 def runGeo2rdr(self):
-    use_gpu = bool(getattr(self, 'useGPU', False))
+    use_gpu = bool(getattr(self, 'useGPU', True))
     if use_gpu and _gpu_geo2rdr_available():
         try:
             return runGeo2rdrGPU(self)

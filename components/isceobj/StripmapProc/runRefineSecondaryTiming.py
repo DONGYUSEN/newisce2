@@ -773,6 +773,199 @@ def _select_gpu_ampcor_template_search(
     return chosen, metrics
 
 
+def _run_cpu_ampcor_probe_candidate(
+    reference,
+    secondary,
+    candidate,
+    snr_threshold,
+):
+    template_window = _coerce_hw_pair(candidate['template_window'], minimum=1)
+    coarse_search_half = _coerce_hw_pair(candidate['search_half'], minimum=1)
+    refine_search_half = _refined_probe_search_half(coarse_search_half)
+    coarse_grid = max(3, _safe_positive_int_env('ISCE_CPU_AMPCOR_PROBE_GRID', 3))
+    refine_grid = max(coarse_grid, _safe_positive_int_env('ISCE_CPU_AMPCOR_PROBE_REFINE_GRID', 5))
+    time_weight = max(0.0, _safe_float_env('ISCE_CPU_AMPCOR_PROBE_TIME_WEIGHT', 0.35))
+
+    coarse_tic = time.perf_counter()
+    coarse_field = estimateOffsetField(
+        reference,
+        secondary,
+        template_window=template_window,
+        search_half=coarse_search_half,
+        num_locations_across=coarse_grid,
+        num_locations_down=coarse_grid,
+    )
+    coarse_elapsed = float(time.perf_counter() - coarse_tic)
+    coarse_metrics = _evaluate_probe_field(coarse_field, snr_threshold=float(snr_threshold))
+    gross_az = float(coarse_metrics['az_median'])
+    gross_rg = float(coarse_metrics['rg_median'])
+
+    refine_tic = time.perf_counter()
+    refine_field = estimateOffsetField(
+        reference,
+        secondary,
+        azoffset=int(np.rint(gross_az)),
+        rgoffset=int(np.rint(gross_rg)),
+        template_window=template_window,
+        search_half=refine_search_half,
+        num_locations_across=refine_grid,
+        num_locations_down=refine_grid,
+    )
+    refine_elapsed = float(time.perf_counter() - refine_tic)
+    refine_metrics = _evaluate_probe_field(refine_field, snr_threshold=float(snr_threshold))
+
+    total_elapsed = float(coarse_elapsed + refine_elapsed)
+    denom = max(total_elapsed, 1.0e-3) ** float(time_weight)
+    score = float(refine_metrics['quality'] / denom)
+
+    return {
+        'template_window': template_window,
+        'coarse_search_half': coarse_search_half,
+        'refine_search_half': refine_search_half,
+        'gross_azimuth_offset': float(refine_metrics['az_median']),
+        'gross_range_offset': float(refine_metrics['rg_median']),
+        'coarse_elapsed_sec': coarse_elapsed,
+        'refine_elapsed_sec': refine_elapsed,
+        'elapsed_sec': total_elapsed,
+        'coarse_probe': coarse_metrics,
+        'refine_probe': refine_metrics,
+        'valid_count': int(refine_metrics['valid_count']),
+        'valid_ratio': float(refine_metrics['valid_ratio']),
+        'mean_snr': float(refine_metrics['mean_snr']),
+        'peak_snr': float(refine_metrics['peak_snr']),
+        'fit_rms': float(refine_metrics['fit_rms']),
+        'quality': float(refine_metrics['quality']),
+        'score': score,
+    }
+
+
+def _select_cpu_ampcor_template_search(
+    reference,
+    secondary,
+    snr_threshold,
+):
+    auto_enabled = _parse_bool_env('ISCE_CPU_AMPCOR_AUTO_TEMPLATE_SEARCH', True)
+    fixed_template = _safe_hw_pair_env(
+        'ISCE_CPU_AMPCOR_TEMPLATE_WINDOW',
+        (128, 128),
+        minimum=16,
+    )
+    fixed_search = _safe_hw_pair_env(
+        'ISCE_CPU_AMPCOR_SEARCH_HALF_RANGE',
+        (32, 32),
+        minimum=4,
+    )
+    if not auto_enabled:
+        fixed = _run_cpu_ampcor_probe_candidate(
+            reference,
+            secondary,
+            {
+                'template_window': tuple(fixed_template),
+                'search_half': tuple(fixed_search),
+            },
+            snr_threshold=snr_threshold,
+        )
+        logger.info(
+            'CPU Ampcor joint auto-selection disabled; using fixed template=%s '
+            'coarse_search_half=%s refine_search_half=%s gross=(az=%.3f, rg=%.3f).',
+            _shape_label(fixed['template_window']),
+            _shape_label(fixed['coarse_search_half']),
+            _shape_label(fixed['refine_search_half']),
+            float(fixed.get('gross_azimuth_offset', 0.0)),
+            float(fixed.get('gross_range_offset', 0.0)),
+        )
+        return fixed, [dict(fixed, success=True, error=None)]
+
+    default_pairs = [
+        ((128, 128), (64, 64)),
+        ((256, 256), (128, 128)),
+        ((512, 512), (256, 256)),
+        ((1024, 1024), (512, 512)),
+        ((1024, 1024), (1024, 1024)),
+    ]
+    candidates = _legacy_template_search_candidates(default_pairs)
+    min_valid_ratio = max(
+        0.0,
+        min(1.0, _safe_float_env('ISCE_CPU_AMPCOR_PROBE_MIN_VALID_RATIO', 0.55)),
+    )
+    tie_margin = max(0.0, _safe_float_env('ISCE_CPU_AMPCOR_PROBE_SCORE_MARGIN', 0.08))
+
+    metrics = []
+    for candidate in candidates:
+        one = {
+            'template_window': tuple(candidate['template_window']),
+            'coarse_search_half': tuple(candidate['search_half']),
+            'success': False,
+            'error': None,
+        }
+        try:
+            probe = _run_cpu_ampcor_probe_candidate(
+                reference,
+                secondary,
+                candidate,
+                snr_threshold=snr_threshold,
+            )
+            one.update(probe)
+            one['success'] = True
+        except Exception as err:
+            one['error'] = str(err)
+            logger.warning(
+                'CPU Ampcor joint probe failed for template=%s coarse_search_half=%s: %s',
+                _shape_label(candidate['template_window']),
+                _shape_label(candidate['search_half']),
+                str(err),
+            )
+        metrics.append(one)
+
+    successful = [row for row in metrics if bool(row.get('success'))]
+    if not successful:
+        raise RuntimeError('CPU Ampcor joint auto-selection failed for all candidates.')
+
+    for row in successful:
+        logger.info(
+            'CPU Ampcor joint probe template=%s coarse_search_half=%s refine_search_half=%s: '
+            'time=%.3fs valid_ratio=%.3f peak_snr=%.3f fit_rms=%.4f score=%.5f gross=(az=%.3f, rg=%.3f)',
+            _shape_label(row['template_window']),
+            _shape_label(row['coarse_search_half']),
+            _shape_label(row['refine_search_half']),
+            float(row['elapsed_sec']),
+            float(row['valid_ratio']),
+            float(row['peak_snr']),
+            float(row['fit_rms']),
+            float(row['score']),
+            float(row['gross_azimuth_offset']),
+            float(row['gross_range_offset']),
+        )
+
+    eligible = [row for row in successful if float(row['valid_ratio']) >= float(min_valid_ratio)]
+    pool = eligible if eligible else successful
+    best_score = max(float(row['score']) for row in pool)
+    near_best = [
+        row for row in pool
+        if float(row['score']) >= (1.0 - float(tie_margin)) * float(best_score)
+    ]
+    chosen = sorted(
+        near_best,
+        key=lambda row: (
+            float(row['fit_rms']),
+            float(row['elapsed_sec']),
+            -int(row['template_window'][0]),
+            -int(row['coarse_search_half'][0]),
+        ),
+    )[0]
+    logger.info(
+        'CPU Ampcor joint auto-selection chose template=%s coarse_search_half=%s refine_search_half=%s '
+        '(score=%.5f, fit_rms=%.4f, valid_ratio=%.3f).',
+        _shape_label(chosen['template_window']),
+        _shape_label(chosen['coarse_search_half']),
+        _shape_label(chosen['refine_search_half']),
+        float(chosen['score']),
+        float(chosen['fit_rms']),
+        float(chosen['valid_ratio']),
+    )
+    return chosen, metrics
+
+
 def _run_gpu_ampcor_with_retry(reference, secondary, out_prefix, **kwargs):
     device_id = int(kwargs.get('device_id', 0))
     template_window = _coerce_hw_pair(kwargs.get('template_window', 128), minimum=1)
@@ -854,11 +1047,11 @@ def _prefer_gpu_ampcor():
 
 
 def _allow_cpu_ampcor_fallback():
-    return _parse_bool_env('ISCE_ALLOW_CPU_AMPCOR_FALLBACK', False)
+    return _parse_bool_env('ISCE_ALLOW_CPU_AMPCOR_FALLBACK', True)
 
 
 def _gpu_ampcor_available(self):
-    if not bool(getattr(self, 'useGPU', False)):
+    if not bool(getattr(self, 'useGPU', True)):
         return False
 
     try:
@@ -1122,7 +1315,16 @@ def _fallback_fit_config(self):
     return cfg
 
 
-def estimateOffsetField(reference, secondary, azoffset=0, rgoffset=0):
+def estimateOffsetField(
+    reference,
+    secondary,
+    azoffset=0,
+    rgoffset=0,
+    template_window=128,
+    search_half=40,
+    num_locations_across=60,
+    num_locations_down=60,
+):
     '''
     Estimate offset field between burst and simamp.
     '''
@@ -1143,24 +1345,39 @@ def estimateOffsetField(reference, secondary, azoffset=0, rgoffset=0):
 
     objOffset = Ampcor(name='reference_offset1')
     objOffset.configure()
-    objOffset.setAcrossGrossOffset(rgoffset)
-    objOffset.setDownGrossOffset(azoffset)
-    objOffset.setWindowSizeWidth(128)
-    objOffset.setWindowSizeHeight(128)
-    objOffset.setSearchWindowSizeWidth(40)
-    objOffset.setSearchWindowSizeHeight(40)
-    margin = 2*objOffset.searchWindowSizeWidth + objOffset.windowSizeWidth
+    template_h, template_w = _coerce_hw_pair(template_window, minimum=16)
+    search_h, search_w = _coerce_hw_pair(search_half, minimum=4)
+    ww = int(template_w)
+    wh = int(template_h)
+    sw = int(search_w)
+    shh = int(search_h)
+    margin_across = 2 * sw + ww
+    margin_down = 2 * shh + wh
+    nAcross = max(2, int(num_locations_across))
+    nDown = max(2, int(num_locations_down))
 
-    nAcross = 60
-    nDown = 60
+    objOffset.setAcrossGrossOffset(int(rgoffset))
+    objOffset.setDownGrossOffset(int(azoffset))
+    objOffset.setWindowSizeWidth(ww)
+    objOffset.setWindowSizeHeight(wh)
+    objOffset.setSearchWindowSizeWidth(sw)
+    objOffset.setSearchWindowSizeHeight(shh)
 
+    offAc = max(101, -int(rgoffset)) + margin_across
+    offDn = max(101, -int(azoffset)) + margin_down
 
-    offAc = max(101,-rgoffset)+margin
-    offDn = max(101,-azoffset)+margin
+    lastAc = int(min(width, sim.getWidth() - offAc) - margin_across)
+    lastDn = int(min(length, sim.getLength() - offDn) - margin_down)
 
-
-    lastAc = int( min(width, sim.getWidth() - offAc) - margin)
-    lastDn = int( min(length, sim.getLength() - offDn) - margin)
+    if (lastAc <= offAc) or (lastDn <= offDn):
+        sar.finalizeImage()
+        sim.finalizeImage()
+        raise ValueError(
+            'Invalid CPU Ampcor ROI for refine timing: '
+            'offAc={0}, lastAc={1}, offDn={2}, lastDn={3}'.format(
+                offAc, lastAc, offDn, lastDn
+            )
+        )
 
     if not objOffset.firstSampleAcross:
         objOffset.setFirstSampleAcross(offAc)
@@ -1500,9 +1717,9 @@ def runRefineSecondaryTiming(self):
     # 1) External coregistration is OFF by default and only enabled by
     #    stripmapApp parameter useExternalCoregistration=True.
     # 2) When external coregistration is disabled:
-    #      useGPU=True  -> GPU Ampcor (fallback to CPU Ampcor on failure/unavailable)
-    #      useGPU=False -> CPU Ampcor
-    use_gpu_flag = bool(getattr(self, 'useGPU', False))
+    #      default useGPU=True -> prefer GPU Ampcor
+    #      if GPU unavailable/fails, fallback to CPU Ampcor (joint probe + coarse-to-fine)
+    use_gpu_flag = bool(getattr(self, 'useGPU', True))
     external_enabled = bool(getattr(self, 'useExternalCoregistration', False))
 
     if external_enabled:
@@ -1619,8 +1836,20 @@ def runRefineSecondaryTiming(self):
                 'useGPU=True, but GPU Ampcor is unavailable. Falling back to CPU Ampcor.'
             )
 
-    logger.info('Running CPU Ampcor for misregistration.')
-    field = estimateOffsetField(referenceSlc, secondarySlc)
+    logger.info('Running CPU Ampcor for misregistration (joint probe + coarse-to-fine).')
+    selected_cpu_cfg, _cpu_probe_metrics = _select_cpu_ampcor_template_search(
+        referenceSlc,
+        secondarySlc,
+        snr_threshold=fallback_cfg['snr'],
+    )
+    field = estimateOffsetField(
+        referenceSlc,
+        secondarySlc,
+        azoffset=int(np.rint(float(selected_cpu_cfg.get('gross_azimuth_offset', 0.0)))),
+        rgoffset=int(np.rint(float(selected_cpu_cfg.get('gross_range_offset', 0.0)))),
+        template_window=selected_cpu_cfg.get('template_window', (128, 128)),
+        search_half=selected_cpu_cfg.get('refine_search_half', (32, 32)),
+    )
     logger.info('CPU Ampcor fit configuration: %s', fallback_cfg)
     _save_ampcor_solution(
         self,
@@ -1629,6 +1858,15 @@ def runRefineSecondaryTiming(self):
         fallback_cfg,
         azratio,
         rgratio,
-        source='cpu_ampcor',
+        source='cpu_ampcor_joint',
+    )
+    logger.info(
+        'CPU Ampcor succeeded with joint probe '
+        '(template=%s, coarse_search_half=%s, refine_search_half=%s, gross=(az=%.3f, rg=%.3f)).',
+        _shape_label(selected_cpu_cfg.get('template_window', (128, 128))),
+        _shape_label(selected_cpu_cfg.get('coarse_search_half', (32, 32))),
+        _shape_label(selected_cpu_cfg.get('refine_search_half', (16, 16))),
+        float(selected_cpu_cfg.get('gross_azimuth_offset', 0.0)),
+        float(selected_cpu_cfg.get('gross_range_offset', 0.0)),
     )
     return None
