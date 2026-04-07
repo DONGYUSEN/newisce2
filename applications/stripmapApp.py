@@ -275,6 +275,42 @@ DO_UNWRAP = Application.Parameter(
     doc="True if unwrapping is desired. To be unsed in combination with UNWRAPPER_NAME."
 )
 
+SNAPHU_GMTSAR_PREPROCESS = Application.Parameter(
+    'snaphuGmtsarPreprocess',
+    public_name='snaphu gmtsar preprocess',
+    default=True,
+    type=bool,
+    mandatory=False,
+    doc='Enable GMTSAR-style coherence-mask preprocessing before snaphu unwrapping.'
+)
+
+SNAPHU_CORR_THRESHOLD = Application.Parameter(
+    'snaphuCorrThreshold',
+    public_name='snaphu coherence threshold',
+    default=0.10,
+    type=float,
+    mandatory=False,
+    doc='Coherence threshold used for snaphu GMTSAR-style preprocessing.'
+)
+
+SNAPHU_INTERP_MASKED_PHASE = Application.Parameter(
+    'snaphuInterpMaskedPhase',
+    public_name='snaphu interpolate masked phase',
+    default=False,
+    type=bool,
+    mandatory=False,
+    doc='Interpolate masked wrapped phase before snaphu (GMTSAR interp-style).'
+)
+
+SNAPHU_INTERP_RADIUS = Application.Parameter(
+    'snaphuInterpRadius',
+    public_name='snaphu interpolation radius',
+    default=300,
+    type=int,
+    mandatory=False,
+    doc='Interpolation search radius in pixels for masked wrapped phase.'
+)
+
 DO_UNWRAP_2STAGE = Application.Parameter(
     'do_unwrap_2stage',
     public_name='do unwrap 2 stage',
@@ -521,6 +557,15 @@ NORMALIZE_SECONDARY_PRF_THRESHOLD = Application.Parameter(
     type=float,
     mandatory=False,
     doc='Relative PRF mismatch threshold to trigger secondary pre-normalization.'
+)
+
+NORMALIZE_SECONDARY_RANGE_THRESHOLD = Application.Parameter(
+    'normalizeSecondaryRangeThreshold',
+    public_name='secondary range sampling relative threshold',
+    default=5.0e-4,
+    type=float,
+    mandatory=False,
+    doc='Relative range-sampling mismatch threshold to trigger secondary pre-normalization.'
 )
 
 NORMALIZE_SECONDARY_AZ_DRIFT_THRESHOLD = Application.Parameter(
@@ -806,6 +851,10 @@ class _RoiBase(Application, FrameMixin):
                       SECONDARY_DOPPLER_METHOD,
                       UNWRAPPER_NAME,
                       DO_UNWRAP,
+                      SNAPHU_GMTSAR_PREPROCESS,
+                      SNAPHU_CORR_THRESHOLD,
+                      SNAPHU_INTERP_MASKED_PHASE,
+                      SNAPHU_INTERP_RADIUS,
                       DO_UNWRAP_2STAGE,
                       UNWRAPPER_2STAGE_NAME,
                       SOLVER_2STAGE,
@@ -834,6 +883,7 @@ class _RoiBase(Application, FrameMixin):
                       NORMALIZE_SECONDARY_FOR_CORRELATION,
                       NORMALIZE_SECONDARY_FORCE,
                       NORMALIZE_SECONDARY_PRF_THRESHOLD,
+                      NORMALIZE_SECONDARY_RANGE_THRESHOLD,
                       NORMALIZE_SECONDARY_AZ_DRIFT_THRESHOLD,
                       NORMALIZE_SECONDARY_DOPPLER_THRESHOLD,
                       NORMALIZE_SECONDARY_DOPPLER_TO_REFERENCE,
