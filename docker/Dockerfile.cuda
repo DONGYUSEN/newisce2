@@ -227,6 +227,14 @@ RUN set -ex \
     fi
 
 RUN set -ex \
+ && printf '%s\n' \
+    'machine urs.earthdata.nasa.gov' \
+    'login dongyusen' \
+    'password DYS123#cug' > /.netrc \
+ && cp /.netrc /root/.netrc \
+ && chmod 600 /.netrc /root/.netrc
+
+RUN set -ex \
  && python3 - <<'PY'
 import importlib
 import sys
