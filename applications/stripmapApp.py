@@ -203,6 +203,50 @@ def _read_root_xml_property(xml_path, property_name):
     return None
 
 
+def _read_component_xml_property(xml_path, component_name, property_name):
+    """
+    Read a property under a named top-level component in stripmapApp XML.
+    """
+    if (not xml_path) or (not os.path.isfile(xml_path)):
+        return None
+
+    comp_norm = ''.join(str(component_name).split()).lower()
+    prop_norm = ''.join(str(property_name).split()).lower()
+    try:
+        root = ET.parse(xml_path).getroot()
+    except Exception:
+        return None
+
+    for comp in root.findall('component'):
+        cname = comp.get('name')
+        if cname is None:
+            name_node = comp.find('name')
+            cname = (name_node.text if name_node is not None else None)
+        if cname is None:
+            continue
+        if ''.join(str(cname).split()).lower() != comp_norm:
+            continue
+
+        for node in comp.findall('property'):
+            pname = node.get('name')
+            if pname is None:
+                name_node = node.find('name')
+                pname = (name_node.text if name_node is not None else None)
+            if pname is None:
+                continue
+            if ''.join(str(pname).split()).lower() != prop_norm:
+                continue
+
+            value_node = node.find('value')
+            if (value_node is not None) and (value_node.text is not None):
+                return value_node.text.strip()
+            if node.text is not None:
+                return node.text.strip()
+            return None
+
+    return None
+
+
 SENSOR_NAME = Application.Parameter(
         'sensorName',
         public_name='sensor name',
@@ -1025,13 +1069,39 @@ class _RoiBase(Application, FrameMixin):
             )
 
         # Compatibility: allow app-level rangeCropFarPixels in stripmapApp XML.
+        # Guard against stale/default values: only apply to sensors when explicitly
+        # configured in the current input XML.
+        xml_crop = _read_component_xml_property(xml_path, 'insar', 'rangeCropFarPixels')
+        if xml_crop is None:
+            xml_crop = _read_root_xml_property(xml_path, 'rangeCropFarPixels')
+        crop_from_xml = False
+        if xml_crop is not None:
+            try:
+                self.rangeCropFarPixels = int(str(xml_crop).strip())
+                crop_from_xml = True
+            except Exception:
+                logger.warning(
+                    'Invalid rangeCropFarPixels value in XML (%s); ignoring.',
+                    str(xml_crop)
+                )
+                self.rangeCropFarPixels = None
+        elif (xml_path is not None) and (self.rangeCropFarPixels is not None):
+            logger.info(
+                'stripmapApp.rangeCropFarPixels=%s is not explicitly set in %s; '
+                'skip applying far-range crop to sensors.',
+                str(self.rangeCropFarPixels), str(xml_path)
+            )
+            self.rangeCropFarPixels = None
+
         if self.rangeCropFarPixels is not None:
             for role, sensor in (('reference', self.reference), ('secondary', self.secondary)):
                 if hasattr(sensor, 'rangeCropFarPixels'):
                     sensor.rangeCropFarPixels = int(self.rangeCropFarPixels)
                     logger.info(
-                        'Applying stripmapApp.rangeCropFarPixels=%d to %s sensor.',
-                        int(self.rangeCropFarPixels), role
+                        'Applying stripmapApp.rangeCropFarPixels=%d to %s sensor%s.',
+                        int(self.rangeCropFarPixels),
+                        role,
+                        (' (from XML)' if crop_from_xml else '')
                     )
                 else:
                     logger.warning(
