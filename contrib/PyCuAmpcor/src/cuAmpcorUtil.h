@@ -55,6 +55,7 @@ void cuArraysPaddingMany(cuArrays<float2> *image1, cuArrays<float2> *image2, cud
 
 //in cuCorrNormalization.cu: utilities to normalize the cross correlation function
 void cuArraysSubtractMean(cuArrays<float> *images, cudaStream_t stream);
+void cuArraysPowerNormalize(cuArrays<float> *images, cudaStream_t stream);
 void cuCorrNormalize(cuArrays<float> *templates, cuArrays<float> *images, cuArrays<float> *results, cudaStream_t stream);
 void cuCorrNormalize64(cuArrays<float> *correlation, cuArrays<float> *reference, cuArrays<float> *secondary, cudaStream_t stream);
 void cuCorrNormalize128(cuArrays<float> *correlation, cuArrays<float> *reference, cuArrays<float> *secondary, cudaStream_t stream);
@@ -96,10 +97,12 @@ void cuArraysElementMultiplyConjugate(cuArrays<float2> *image1, cuArrays<float2>
 // implemented in cuArraysCopy.cu
 void cuArraysCopyExtractCorr(cuArrays<float> *imagesIn, cuArrays<float> *imagesOut, cuArrays<int> *imagesValid, cuArrays<int2> *maxloc, cudaStream_t stream);
 // implemented in cuCorrNormalization.cu
-void cuArraysSumCorr(cuArrays<float> *images, cuArrays<int> *imagesValid, cuArrays<float> *imagesSum, cuArrays<int> *imagesValidCount, cudaStream_t stream);
+void cuArraysSumCorr(cuArrays<float> *images, cuArrays<int> *imagesValid, cuArrays<float> *imagesSum,
+    cuArrays<float> *imagesSqSum, cuArrays<int> *imagesValidCount, cudaStream_t stream);
 
 // implemented in cuEstimateStats.cu
-void cuEstimateSnr(cuArrays<float> *corrSum, cuArrays<int> *corrValidCount, cuArrays<float> *maxval, cuArrays<float> *snrValue, cudaStream_t stream);
+void cuEstimateSnr(cuArrays<float> *corrSum, cuArrays<float> *corrSqSum, cuArrays<int> *corrValidCount,
+    cuArrays<float> *maxval, cuArrays<float> *snrValue, cudaStream_t stream);
 
 // implemented in cuEstimateStats.cu
 void cuEstimateVariance(cuArrays<float> *corrBatchRaw, cuArrays<int2> *maxloc, cuArrays<float> *maxval, int templateSize, cuArrays<float3> *covValue, cudaStream_t stream);

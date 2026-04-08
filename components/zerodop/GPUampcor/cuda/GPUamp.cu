@@ -107,6 +107,7 @@ __device__ inline void deramp(cuFloatComplex *img, int length, int width, cuFloa
 
     cuFloatComplex cx_phaseDown, cx_phaseAcross, temp;
     float rl_phaseDown, rl_phaseAcross;
+    float powerSum, invRms;
     int i,j;
 
     // Init to 0.
@@ -114,6 +115,8 @@ __device__ inline void deramp(cuFloatComplex *img, int length, int width, cuFloa
     cx_phaseAcross = make_cuFloatComplex(0.,0.);
     rl_phaseDown = 0.;
     rl_phaseAcross = 0.;
+    powerSum = 0.;
+    invRms = 1.;
 
     // Accumulate phase across and phase down. For phase across, sum adds the value of the pixel multiplied by the complex
     // conjugate of the pixel in the next row (same column). For phase down, sum adds the value of the pixel multiplied by
@@ -134,6 +137,15 @@ __device__ inline void deramp(cuFloatComplex *img, int length, int width, cuFloa
     if (cuCabsf(cx_phaseDown) != 0.) rl_phaseDown = atan2(cx_phaseDown.y, cx_phaseDown.x);
     if (cuCabsf(cx_phaseAcross) != 0.) rl_phaseAcross = atan2(cx_phaseAcross.y, cx_phaseAcross.x);
 
+    // Compute RMS power on the non-padded chip before FFT.
+    for (i=0; i<length; i++) {
+        for (j=0; j<width; j++) {
+            float mag = cuCabsf(img[IDX1D(i,j,width)]);
+            powerSum = powerSum + (mag * mag);
+        }
+    }
+    if (powerSum > 0.) invRms = rsqrtf((powerSum / (length * width)) + 1.e-12);
+
     // For each pixel in the image block...
     for (i=0; i<length; i++) {
         for (j=0; j<width; j++) {
@@ -141,6 +153,8 @@ __device__ inline void deramp(cuFloatComplex *img, int length, int width, cuFloa
             temp = make_cuFloatComplex(cos((rl_phaseAcross*(i+1))+(rl_phaseDown*(j+1))), sin((rl_phaseAcross*(i+1))+(rl_phaseDown*(j+1))));
             // Apply scaling factor to the pixel to deramp it and copies the result to the corresponding location within the padded window
             padImg[IDX1D(i,j,ini[7])] = cuCmulf(img[IDX1D(i,j,width)], temp);
+            padImg[IDX1D(i,j,ini[7])].x = padImg[IDX1D(i,j,ini[7])].x * invRms;
+            padImg[IDX1D(i,j,ini[7])].y = padImg[IDX1D(i,j,ini[7])].y * invRms;
         }
     }
 }
@@ -408,7 +422,8 @@ __global__ void calcRough(struct StepTwoData s2Data) {
         cuFloatComplex *zoomWin = &(s2Data.zoomWins[IDX1D(block,0,4*ini[8]*ini[8])]);          // Non-zero data in ini[8] x ini[8]
         float *schSum = &(s2Data.schSums[IDX1D(block,0,(2*ini[2]+1)*(2*ini[3]+1))]);                     // Non-zero data in (2*ini[2]) x (2*ini[3])
         float *schSumSq = &(s2Data.schSumSqs[IDX1D(block,0,(2*ini[2]+1)*(2*ini[3]+1))]);                 // Non-zero data in (2*ini[2]) x (2*ini[3])
-        float eSum, e2Sum, vertVar, horzVar, diagVar, noiseSq, noiseFr, u, snrNorm, snr;
+        float eSum, e2Sum, vertVar, horzVar, diagVar, noiseSq, noiseFr, u, snr;
+        float bgSum, bgSqSum, bgMean, bgVar, bgStd, peakVal;
         int i, j, idx, peakRow, peakCol, count, widthMargin, heightMargin; // sumRow, sumCol
         cublasHandle_t handle;  // Pointer to cuBLAS library context
 
@@ -470,7 +485,12 @@ __global__ void calcRough(struct StepTwoData s2Data) {
         noiseSq = 0.;
         noiseFr = 0.;
         u = 0.;
-        snrNorm = 0.;
+        bgSum = 0.;
+        bgSqSum = 0.;
+        bgMean = 0.;
+        bgVar = 0.;
+        bgStd = 0.;
+        peakVal = 0.;
         snr = 0.;
         count = 0.;
       
@@ -506,17 +526,28 @@ __global__ void calcRough(struct StepTwoData s2Data) {
                 s2Data.cov3Arr[block] = ((noiseSq * u * diagVar) - (noiseFr * diagVar * (vertVar + horzVar))) / pow2(u);
             }
 
+            peakVal = corrWin[IDX1D(peakRow,peakCol,ini[7])].x;
+
             // Accumulate a window of (max) 18 x 18 values around the rough peak
             for (i=max(peakRow-9,0); i<min(peakRow+9,2*widthMargin); i++) {
                 for (j=max(peakCol-9,0); j<min(peakCol+9,2*heightMargin); j++) {
-                    count = count + 1;
-                    snrNorm = snrNorm + pow2(corrWin[IDX1D(i,j,ini[7])].x);
+                    if ((i != peakRow) || (j != peakCol)) {
+                        float corrVal = corrWin[IDX1D(i,j,ini[7])].x;
+                        count = count + 1;
+                        bgSum = bgSum + corrVal;
+                        bgSqSum = bgSqSum + (corrVal * corrVal);
+                    }
                 }
             }
-            // Average the accumulated values less the peak value itself to get the approximate normalization magnitude
-            snrNorm = (snrNorm - pow2(corrWin[IDX1D(peakRow,peakCol,ini[7])].x)) / (count - 1);
-            // Find the SNR as a measure of the magnitude of the peak value relative to the window of the surface around it
-            snr = pow2(corrWin[IDX1D(peakRow,peakCol,ini[7])].x) / max(snrNorm, float(1.e-10));
+            // Find SNR = (peak - mean_corr) / std_corr in the local background around the peak.
+            if (count > 1) {
+                bgMean = bgSum / count;
+                bgVar = max((bgSqSum / count) - (bgMean * bgMean), float(1.e-12));
+                bgStd = sqrt(bgVar);
+                snr = (peakVal - bgMean) / bgStd;
+            } else {
+                snr = 0.;
+            }
             // Cap the SNR by a max value
             s2Data.snrArr[block] = min(snr, float(9999.99999));
 

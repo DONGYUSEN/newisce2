@@ -138,10 +138,54 @@ void cuArraysSubtractMean(cuArrays<float> *images, cudaStream_t stream)
     getLastCudaError("cuArraysSubtractMean kernel error\n");
 }
 
+// cuda kernel to normalize rms power for each image
+template<const int Nthreads>
+__global__ void cuArraysPowerNormalize_kernel(float *images, int imageSize, float invSize, int nImages)
+{
+    __shared__ float shmem[Nthreads];
+
+    const int tid = threadIdx.x;
+    const int bid = blockIdx.x;
+
+    if (bid >= nImages) return;
+
+    const int imageOffset = bid * imageSize;
+    float *imageD = images + imageOffset;
+
+    float sum2 = 0.0f;
+    for (int i = tid; i < imageSize; i += Nthreads) {
+        float v = imageD[i];
+        sum2 += v * v;
+    }
+    sum2 = sumReduceBlock<Nthreads>(sum2, shmem);
+
+    float invRms = rsqrtf(sum2 * invSize + FLT_EPSILON);
+    for (int i = tid; i < imageSize; i += Nthreads) {
+        imageD[i] *= invRms;
+    }
+}
+
+/**
+ * Normalize images to unit RMS power before FFT.
+ * @param[inout] images Input/Output images
+ * @param[in] stream cudaStream
+ */
+void cuArraysPowerNormalize(cuArrays<float> *images, cudaStream_t stream)
+{
+    const dim3 grid(images->count, 1, 1);
+    const int imageSize = images->width*images->height;
+    const float invSize = 1.0f/imageSize;
+
+    cuArraysPowerNormalize_kernel<NTHREADS> <<<grid,NTHREADS,0,stream>>>
+        (images->devData, imageSize, invSize, images->count);
+    getLastCudaError("cuArraysPowerNormalize kernel error\n");
+}
+
 
 // cuda kernel to compute summation on extracted correlation surface (Minyan)
 template<const int Nthreads>
-__global__ void cuArraysSumCorr_kernel(float *images, int *imagesValid, float *imagesSum, int *imagesValidCount, int imageSize, int nImages)
+__global__ void cuArraysSumCorr_kernel(float *images, int *imagesValid, float *imagesSum,
+    float *imagesSqSum, int *imagesValidCount, int imageSize, int nImages)
 {
     __shared__ float shmem[Nthreads];
 
@@ -156,38 +200,43 @@ __global__ void cuArraysSumCorr_kernel(float *images, int *imagesValid, float *i
     int*      imageValidD = imagesValid + imageOffset;
 
     float sum  = 0.0f;
-    int count = 0;
+    float sumSq = 0.0f;
+    float count = 0.0f;
 
     for (int i = tid; i < imageSize; i += Nthreads) {
-            sum += imageD[i] * imageD[i];
-            count += imageValidD[i];
+            sum += imageD[i];
+            sumSq += imageD[i] * imageD[i];
+            count += static_cast<float>(imageValidD[i]);
     }
 
     sum = sumReduceBlock<Nthreads>(sum, shmem);
+    sumSq = sumReduceBlock<Nthreads>(sumSq, shmem);
     count = sumReduceBlock<Nthreads>(count, shmem);
 
     if(tid ==0) {
         imagesSum[bid] = sum;
-        imagesValidCount[bid] = count;
+        imagesSqSum[bid] = sumSq;
+        imagesValidCount[bid] = static_cast<int>(count + 0.5f);
     }
 }
 
 /**
- * Compute the variance of images (for SNR)
+ * Compute sum and sum-square of images (for SNR)
  * @param[in] images Input images
  * @param[in] imagesValid validity flags for each pixel
- * @param[out] imagesSum variance
+ * @param[out] imagesSum sum
+ * @param[out] imagesSqSum sum-square
  * @param[out] imagesValidCount count of total valid pixels
  * @param[in] stream cudaStream
  */
 void cuArraysSumCorr(cuArrays<float> *images, cuArrays<int> *imagesValid, cuArrays<float> *imagesSum,
-    cuArrays<int> *imagesValidCount, cudaStream_t stream)
+    cuArrays<float> *imagesSqSum, cuArrays<int> *imagesValidCount, cudaStream_t stream)
 {
     const dim3 grid(images->count, 1, 1);
     const int imageSize = images->width*images->height;
 
     cuArraysSumCorr_kernel<NTHREADS> <<<grid,NTHREADS,0,stream>>>(images->devData, imagesValid->devData,
-        imagesSum->devData, imagesValidCount->devData, imageSize, images->count);
+        imagesSum->devData, imagesSqSum->devData, imagesValidCount->devData, imageSize, images->count);
     getLastCudaError("cuArraysSumValueCorr kernel error\n");
 }
 

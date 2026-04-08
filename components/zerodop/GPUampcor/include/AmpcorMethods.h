@@ -37,6 +37,7 @@ struct AmpcorMethods {
     void correlate(std::vector<std::vector<float> >&,std::vector<std::vector<float> >&,int,int,int,int,int,int,float&,
                     std::vector<float>&,std::vector<std::vector<float> >&,int&,int&,std::vector<int>&,int,bool);
     void derampc(std::vector<std::complex<float> >&,int,int);
+    void powerNormalize(std::vector<std::complex<float> >&,int,int);
     void fourn2d(std::vector<std::complex<float> >&,std::vector<int>&,int);
 };
 

@@ -408,6 +408,36 @@ void AmpcorMethods::derampc(vector<complex<float> > &img, int height, int width)
     }
 }
 
+void AmpcorMethods::powerNormalize(vector<complex<float> > &img, int height, int width) {
+
+    double powerSum = 0.;
+    int validCount = 0;
+    int i, j, idx;
+
+    for (i=0; i<height; i++) {
+        for (j=0; j<width; j++) {
+            idx = (i * width) + j;
+            float mag = abs(img[idx]);
+            if (mag > 0.) {
+                powerSum = powerSum + (mag * mag);
+                validCount++;
+            }
+        }
+    }
+
+    if ((validCount > 0) && (powerSum > 0.)) {
+        float rms = sqrt(powerSum / validCount);
+        if (rms > 0.) {
+            for (i=0; i<height; i++) {
+                for (j=0; j<width; j++) {
+                    idx = (i * width) + j;
+                    img[idx] = img[idx] / rms;
+                }
+            }
+        }
+    }
+}
+
 void AmpcorMethods::fourn2d(vector<complex<float> > &img, vector<int> &nPoints, int fftDir) {
     
     vector<complex<float> > d(16384);
@@ -425,4 +455,3 @@ void AmpcorMethods::fourn2d(vector<complex<float> > &img, vector<int> &nPoints, 
         }
     }
 }
-

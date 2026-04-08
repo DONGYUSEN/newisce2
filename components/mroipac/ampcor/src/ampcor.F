@@ -70,7 +70,8 @@
       integer i_x,i_xx
       integer i_y,i_yy
 
-      real r_snr,r_outside
+      real r_snr,r_outside,r_mean_corr,r_std_corr,r_var_corr
+      real*8 r_sum_corr,r_sumsq_corr
       integer i_xlu, i_ylu
       integer i_mag1, i_mag2
 
@@ -652,18 +653,28 @@
               if(i_flag .eq. 0 .and. i_edge(1) .eq. 0 .and.
      &           i_edge(2) .eq. 0)then !found a potentially good data point
 
-                r_outside = 0.0
+                r_sum_corr = 0.0d0
+                r_sumsq_corr = 0.0d0
                 i_cnta = 0
                 do l=max(i_shifty_filt-9,1),min(i_shifty_filt+11,i_wsyj_filt-i_wsyi_filt)
                   do k=max(i_shiftx_filt-9,1),min(i_shiftx_filt+11,i_wsxj-i_wsxi)
-                    i_cnta = i_cnta + 1
-                    r_outside = r_outside + r_imgc_filt(k,l)**2
+                    if(k .ne. i_shiftx_filt .or. l .ne. i_shifty_filt)then
+                      r_outside = r_imgc_filt(k,l)
+                      r_sum_corr = r_sum_corr + dble(r_outside)
+                      r_sumsq_corr = r_sumsq_corr + dble(r_outside*r_outside)
+                      i_cnta = i_cnta + 1
+                    endif
                   enddo
                 enddo
-                r_outside = r_outside - r_peak**2
-                r_outside = r_outside/(i_cnta-1)
-
-                r_snr = r_peak**2/max(r_outside,1.e-10)
+                if(i_cnta .gt. 1)then
+                  r_mean_corr = real(r_sum_corr/dble(i_cnta))
+                  r_var_corr = real(max(r_sumsq_corr/dble(i_cnta) -
+     &                 dble(r_mean_corr)*dble(r_mean_corr),1.0d-12))
+                  r_std_corr = sqrt(r_var_corr)
+                  r_snr = (r_peak-r_mean_corr)/r_std_corr
+                else
+                  r_snr = 0.0
+                endif
 
                 if(r_snr .gt. r_snrth .and. r_cov(1) .lt. r_covth .and. r_cov(2) .lt. r_covth)then
                   continue_fine_matching = 1
@@ -820,18 +831,28 @@
                   enddo
                endif
 
-               r_outside = 0.0
+               r_sum_corr = 0.0d0
+               r_sumsq_corr = 0.0d0
                i_cnta = 0
                do l=max(i_shifty-9,1),min(i_shifty+11,i_wsyj-i_wsyi)
                   do k=max(i_shiftx-9,1),min(i_shiftx+11,i_wsxj-i_wsxi)
-                     i_cnta = i_cnta + 1
-                     r_outside = r_outside + r_imgc(k,l)**2
+                     if(k .ne. i_shiftx .or. l .ne. i_shifty)then
+                        r_outside = r_imgc(k,l)
+                        r_sum_corr = r_sum_corr + dble(r_outside)
+                        r_sumsq_corr = r_sumsq_corr + dble(r_outside*r_outside)
+                        i_cnta = i_cnta + 1
+                     endif
                   enddo
                enddo
-               r_outside = r_outside - r_peak**2
-               r_outside = r_outside/(i_cnta-1)
-
-               r_snr = r_peak**2/max(r_outside,1.e-10)
+               if(i_cnta .gt. 1)then
+                  r_mean_corr = real(r_sum_corr/dble(i_cnta))
+                  r_var_corr = real(max(r_sumsq_corr/dble(i_cnta) -
+     &                 dble(r_mean_corr)*dble(r_mean_corr),1.0d-12))
+                  r_std_corr = sqrt(r_var_corr)
+                  r_snr = (r_peak-r_mean_corr)/r_std_corr
+               else
+                  r_snr = 0.0
+               endif
 !ccccc               write(6,'(a,1x,2(f20.10,1x))') 'Peak/SNR = ',r_peak,r_snr
                if(r_snr .gt. r_snrth .and. r_cov(1) .lt. r_covth .and. r_cov(2) .lt. r_covth)then
                 continue_fine_matching = 1
@@ -921,6 +942,8 @@
 
                   call derampc(c_chipref,i_n2wsxi,i_n2wsyi)
                   call derampc(c_chipsch,i_n2wsxj,i_n2wsyj)
+                  call power_normalize_c8(c_chipref,i_n2wsxi,i_n2wsyi)
+                  call power_normalize_c8(c_chipsch,i_n2wsxj,i_n2wsyj)
 
 !c     forward fft the data
 
@@ -1095,19 +1118,29 @@
                      call dump_chip_r4(a_debugfile,r_imgcos,1,i_wsox,1,i_wsoy,i_wsox,i_wsoy)
                   endif
 
-                  r_outside = 0.0
+                  r_sum_corr = 0.0d0
+                  r_sumsq_corr = 0.0d0
                   i_cnta = 0
                   do l=max(i_shiftyos-9,1),min(i_shiftyos+11,i_wsoy)
                      do k=max(i_shiftxos-9,1),min(i_shiftxos+11,i_wsox)
-                        i_cnta = i_cnta + 1
-                        r_outside = r_outside + r_imgcos(k,l)**2
+                        if(k .ne. i_shiftxos .or. l .ne. i_shiftyos)then
+                           r_outside = r_imgcos(k,l)
+                           r_sum_corr = r_sum_corr + dble(r_outside)
+                           r_sumsq_corr = r_sumsq_corr + dble(r_outside*r_outside)
+                           i_cnta = i_cnta + 1
+                        endif
                      enddo
                   enddo
-                  r_outside = r_outside - r_peakos**2
-                  r_outside = r_outside/(i_cnta-1)
-                  r_snros = r_peakos**2/min(r_outside,1.e10)
-
-                  r_snros = 10.
+                  if(i_cnta .gt. 1)then
+                     r_mean_corr = real(r_sum_corr/dble(i_cnta))
+                     r_var_corr = real(max(r_sumsq_corr/dble(i_cnta) -
+     &                    dble(r_mean_corr)*dble(r_mean_corr),1.0d-12))
+                     r_std_corr = sqrt(r_var_corr)
+                     r_snros = (r_peakos-r_mean_corr)/r_std_corr
+                  else
+                     r_snros = 0.0
+                  endif
+                  r_snr = r_snros
                   r_covos(1) = 0.
                   r_covos(2) = 0.
 
@@ -1950,6 +1983,42 @@ c     goodness of the match
       endif
 
       return
+
+      end
+
+cc--------------------------------------------------
+
+      subroutine power_normalize_c8(c_img,i_dimx,i_dimy)
+
+      implicit none
+      integer i_dimx,i_dimy,i,j,i_count
+      complex c_img(i_dimx,i_dimy)
+      real*4 r_abs,r_rms
+      real*8 r_power_sum
+
+      r_power_sum = 0.0d0
+      i_count = 0
+
+      do i=1,i_dimx
+         do j=1,i_dimy
+            r_abs = cabs(c_img(i,j))
+            if(r_abs .gt. 0.0)then
+               r_power_sum = r_power_sum + dble(r_abs*r_abs)
+               i_count = i_count + 1
+            endif
+         enddo
+      enddo
+
+      if(i_count .gt. 0 .and. r_power_sum .gt. 0.0d0)then
+         r_rms = sqrt(real(r_power_sum/dble(i_count)))
+         if(r_rms .gt. 0.0)then
+            do i=1,i_dimx
+               do j=1,i_dimy
+                  c_img(i,j) = c_img(i,j)/r_rms
+               enddo
+            enddo
+         endif
+      endif
 
       end
 

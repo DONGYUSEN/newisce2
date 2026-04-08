@@ -80,7 +80,7 @@ private:
 
     // SNR estimation
     cuArrays<float> *r_corrBatchRawZoomIn;
-    cuArrays<float> *r_corrBatchSum;
+    cuArrays<float> *r_corrBatchSum, *r_corrBatchSqSum;
     cuArrays<int> *i_corrBatchZoomInValid, *i_corrBatchValidCount;
     cuArrays<float> *r_snrValue;
 

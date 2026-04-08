@@ -27,6 +27,8 @@ void cuAmpcorChunk::run(int idxDown_, int idxAcross_)
 
     // compute and subtract mean values (for normalized)
     cuArraysSubtractMean(r_referenceBatchRaw, stream);
+    // Normalize power before FFT
+    cuArraysPowerNormalize(r_referenceBatchRaw, stream);
 
 #ifdef CUAMPCOR_DEBUG
     // dump the raw reference image(s)
@@ -37,6 +39,8 @@ void cuAmpcorChunk::run(int idxDown_, int idxAcross_)
     loadSecondaryChunk();
     // take amplitudes
     cuArraysAbs(c_secondaryBatchRaw, r_secondaryBatchRaw, stream);
+    // Normalize power before FFT
+    cuArraysPowerNormalize(r_secondaryBatchRaw, stream);
 
 #ifdef CUAMPCOR_DEBUG
     // dump the raw secondary image(s)
@@ -76,18 +80,19 @@ void cuAmpcorChunk::run(int idxDown_, int idxAcross_)
     cuArraysCopyExtractCorr(r_corrBatchRaw, r_corrBatchRawZoomIn, i_corrBatchZoomInValid, offsetInit, stream);
 
     // step2: summation of correlation and data point values
-    cuArraysSumCorr(r_corrBatchRawZoomIn, i_corrBatchZoomInValid, r_corrBatchSum, i_corrBatchValidCount, stream);
+    cuArraysSumCorr(r_corrBatchRawZoomIn, i_corrBatchZoomInValid, r_corrBatchSum, r_corrBatchSqSum, i_corrBatchValidCount, stream);
 
 #ifdef CUAMPCOR_DEBUG
     r_maxval->outputToFile("r_maxval", stream);
     r_corrBatchRawZoomIn->outputToFile("r_corrBatchRawStatZoomIn", stream);
     i_corrBatchZoomInValid->outputToFile("i_corrBatchZoomInValid", stream);
     r_corrBatchSum->outputToFile("r_corrBatchSum", stream);
+    r_corrBatchSqSum->outputToFile("r_corrBatchSqSum", stream);
     i_corrBatchValidCount->outputToFile("i_corrBatchValidCount", stream);
 #endif
 
-    // step3: divide the peak value by the mean of surrounding values
-    cuEstimateSnr(r_corrBatchSum, i_corrBatchValidCount, r_maxval, r_snrValue, stream);
+    // step3: snr = (peak - mean_corr) / std_corr
+    cuEstimateSnr(r_corrBatchSum, r_corrBatchSqSum, i_corrBatchValidCount, r_maxval, r_snrValue, stream);
 
 #ifdef CUAMPCOR_DEBUG
     offsetInit->outputToFile("i_offsetInit", stream);
@@ -124,6 +129,8 @@ void cuAmpcorChunk::run(int idxDown_, int idxAcross_)
 
     // compute and subtract the mean value
     cuArraysSubtractMean(r_referenceBatchOverSampled, stream);
+    // Normalize power before FFT
+    cuArraysPowerNormalize(r_referenceBatchOverSampled, stream);
 
 #ifdef CUAMPCOR_DEBUG
     // dump the oversampled reference image(s) with mean subtracted
@@ -135,6 +142,8 @@ void cuAmpcorChunk::run(int idxDown_, int idxAcross_)
     secondaryBatchOverSampler->execute(c_secondaryBatchZoomIn, c_secondaryBatchOverSampled, param->derampMethod);
     // take amplitudes
     cuArraysAbs(c_secondaryBatchOverSampled, r_secondaryBatchOverSampled, stream);
+    // Normalize power before FFT
+    cuArraysPowerNormalize(r_secondaryBatchOverSampled, stream);
 
 #ifdef CUAMPCOR_DEBUG
     // dump the extracted raw secondary image
@@ -511,6 +520,11 @@ cuAmpcorChunk::cuAmpcorChunk(cuAmpcorParameter *param_, GDALImage *reference_, G
                     param->numberWindowDownInChunk,
                     param->numberWindowAcrossInChunk);
     r_corrBatchSum->allocate();
+
+    r_corrBatchSqSum = new cuArrays<float> (
+                    param->numberWindowDownInChunk,
+                    param->numberWindowAcrossInChunk);
+    r_corrBatchSqSum->allocate();
 
     i_corrBatchValidCount = new cuArrays<int> (
                         param->numberWindowDownInChunk,

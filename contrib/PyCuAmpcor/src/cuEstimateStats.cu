@@ -17,31 +17,43 @@
 #include <limits>
 
 // cuda kernel for cuEstimateSnr
-__global__ void cudaKernel_estimateSnr(const float* corrSum, const int* corrValidCount, const float* maxval, float* snrValue, const int size)
+__global__ void cudaKernel_estimateSnr(const float* corrSum, const float* corrSqSum, const int* corrValidCount,
+    const float* maxval, float* snrValue, const int size)
 
 {
     int idx = threadIdx.x + blockDim.x*blockIdx.x;
 
     if (idx >= size) return;
 
-    float mean = (corrSum[idx] - maxval[idx] * maxval[idx]) / (corrValidCount[idx] - 1);
+    int bgCount = corrValidCount[idx] - 1;
+    if (bgCount <= 1) {
+        snrValue[idx] = 0.0f;
+        return;
+    }
 
-    snrValue[idx] = maxval[idx] * maxval[idx] / mean;
+    float peak = maxval[idx];
+    float mean = (corrSum[idx] - peak) / bgCount;
+    float meanSq = (corrSqSum[idx] - peak * peak) / bgCount;
+    float var = fmaxf(meanSq - mean * mean, 1.0e-12f);
+    snrValue[idx] = (peak - mean) / sqrtf(var);
 }
 
 /**
  * Estimate the signal to noise ratio (SNR) of the correlation surface
  * @param[in] corrSum the sum of the correlation surface
+ * @param[in] corrSqSum the sum of squared correlation surface values
  * @param[in] corrValidCount the number of valid pixels contributing to sum
  * @param[out] snrValue return snr value
  * @param[in] stream cuda stream
  */
-void cuEstimateSnr(cuArrays<float> *corrSum, cuArrays<int> *corrValidCount, cuArrays<float> *maxval, cuArrays<float> *snrValue, cudaStream_t stream)
+void cuEstimateSnr(cuArrays<float> *corrSum, cuArrays<float> *corrSqSum, cuArrays<int> *corrValidCount,
+    cuArrays<float> *maxval, cuArrays<float> *snrValue, cudaStream_t stream)
 {
 
     int size = corrSum->getSize();
     cudaKernel_estimateSnr<<< IDIVUP(size, NTHREADS), NTHREADS, 0, stream>>>
-        (corrSum->devData, corrValidCount->devData, maxval->devData, snrValue->devData, size);
+        (corrSum->devData, corrSqSum->devData, corrValidCount->devData,
+         maxval->devData, snrValue->devData, size);
     getLastCudaError("cuda kernel estimate stats error\n");
 }
 

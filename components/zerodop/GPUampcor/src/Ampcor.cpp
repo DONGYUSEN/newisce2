@@ -91,13 +91,14 @@ void Ampcor::ampcor() {
     vector<vector<float> > refChip, schWin, corrSurface;
     vector<vector<float> > osampRefChip, osampSchWin, osampCorrSurface;
     vector<float> covs(3), osampCovs(3), osampCorrOffset(2), sincInterp(MAXINTLGH);
-    float downOffset, acrossOffset, corrPeak, snr, snrNormFactor, osampCorrPeak, osampAcrossOffset, osampDownOffset;
+    float downOffset, acrossOffset, corrPeak, snr, osampCorrPeak, osampAcrossOffset, osampDownOffset;
     float locationAcrossOffset, locationDownOffset, resampFactor, sincWeight, maxCorr, sincDelay;
+    float corrSum, corrSqSum, corrMean, corrVar, corrStd;
 
     vector<int> isEdge(2), numPoints(2), corrPeaks(2);
     int schWinHeight, schWinWidth, padRefChipHeight, padRefChipWidth, padSchWinHeight, padSchWinWidth;
     int idx, idx2, idx3, peakMargin, mainArrIdx, peakRow, peakCol, corr_flag, xScaled, yScaled; 
-    int counter, fft_direction, osampPeakRow, osampPeakCol;
+    int count, fft_direction, osampPeakRow, osampPeakCol;
     int osampRefChipWidth, osampRefChipHeight, osampSchWinWidth, osampSchWinHeight, osampCorrWidth, osampCorrHeight;
     int peakWinWidth, peakWinHeight, resampLength, sincInterpLength, maxImgWidth;
 
@@ -637,17 +638,28 @@ void Ampcor::ampcor() {
                         }
                     }
 
-                    snrNormFactor = 0.;
-                    counter = 0;
+                    corrSum = 0.;
+                    corrSqSum = 0.;
+                    count = 0;
                     for (int l=max(peakCol-9,1); l<=min(peakCol+11,schWinHeight-refChipHeight); l++) {
                         for (int k=max(peakRow-9,1); k<=min(peakRow+11,schWinWidth-refChipWidth); k++) {
-                            counter += 1;
-                            snrNormFactor = snrNormFactor + pow(corrSurface[k-1][l-1],2);
+                            if ((k != peakRow) || (l != peakCol)) {
+                                float corrVal = corrSurface[k-1][l-1];
+                                corrSum = corrSum + corrVal;
+                                corrSqSum = corrSqSum + (corrVal * corrVal);
+                                count = count + 1;
+                            }
                         }
                     }
-                    
-                    snrNormFactor = (snrNormFactor - pow(corrPeak,2)) / (counter - 1);
-                    snr = pow(corrPeak,2) / max(snrNormFactor,float(1.e-10));
+
+                    if (count > 1) {
+                        corrMean = corrSum / count;
+                        corrVar = max((corrSqSum / count) - (corrMean * corrMean), float(1.e-12));
+                        corrStd = sqrt(corrVar);
+                        snr = (corrPeak - corrMean) / corrStd;
+                    } else {
+                        snr = 0.;
+                    }
 
                     if ((snr > snrThresh) && (covs[0] < covThresh) && (covs[1] < covThresh)) {
 
@@ -682,6 +694,8 @@ void Ampcor::ampcor() {
 
                         aMethods.derampc(padRefChip, padRefChipWidth, padRefChipHeight);
                         aMethods.derampc(padSchWin, padSchWinWidth, padSchWinHeight);
+                        aMethods.powerNormalize(padRefChip, padRefChipWidth, padRefChipHeight);
+                        aMethods.powerNormalize(padSchWin, padSchWinWidth, padSchWinHeight);
                        
                         // forward fft the data
 
@@ -919,4 +933,3 @@ void Ampcor::ampcor() {
         dumpToFiles();
     } // Non-gpu ampcor
 }
-
