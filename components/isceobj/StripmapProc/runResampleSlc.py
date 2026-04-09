@@ -11,8 +11,31 @@ from isceobj.Util.decorators import use_api
 import os
 import numpy as np
 import shelve
+import glob
 
 logger = logging.getLogger('isce.insar.runResampleSlc')
+
+
+def _parse_bool(value, default=False):
+    if value is None:
+        return bool(default)
+    sval = str(value).strip().lower()
+    if sval in ('1', 'true', 't', 'yes', 'y', 'on'):
+        return True
+    if sval in ('0', 'false', 'f', 'no', 'n', 'off'):
+        return False
+    return bool(default)
+
+
+def _parse_bool_env(name, default=False):
+    return _parse_bool(os.environ.get(name), default=default)
+
+
+def _safe_float_env(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except Exception:
+        return float(default)
 
 
 def _infer_offset_dtype(filename, width, length):
@@ -109,6 +132,209 @@ def _merge_range_poly_into_raster(rgname, width, length, rgpoly):
     outimg.renderHdr()
     return outimg
 
+
+def _valid_mask(arr, nodata):
+    mask = np.isfinite(arr)
+    if np.isfinite(nodata):
+        mask &= (arr != nodata)
+    return mask
+
+
+def _valid_bbox(mask):
+    if not np.any(mask):
+        return None
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
+    r0 = int(np.argmax(rows))
+    r1 = int(len(rows) - 1 - np.argmax(rows[::-1]))
+    c0 = int(np.argmax(cols))
+    c1 = int(len(cols) - 1 - np.argmax(cols[::-1]))
+    return (r0, r1, c0, c1)
+
+
+def _render_like(srcname, outname, dtype):
+    outimg = isceobj.createImage()
+    outimg.load(srcname + '.xml')
+    outimg.filename = outname
+    if dtype == np.float64:
+        outimg.dataType = 'DOUBLE'
+    elif dtype == np.float32:
+        outimg.dataType = 'FLOAT'
+    elif dtype == np.uint8:
+        outimg.dataType = 'BYTE'
+    outimg.setAccessMode('READ')
+    outimg.renderHdr()
+    return outimg
+
+
+def _prepare_geo2rdr_offset_images(azname, rgname, force_mask=False):
+    nodata = _safe_float_env('ISCE_GEO2RDR_OFFSET_NODATA', -999999.0)
+    enable_mask = _parse_bool_env('ISCE_GEO2RDR_OFFSET_MASK_ENABLE', True)
+    if force_mask:
+        enable_mask = True
+    emit_mask = _parse_bool_env('ISCE_GEO2RDR_OFFSET_EMIT_VALIDMASK', True)
+    fill_value = _safe_float_env('ISCE_GEO2RDR_OFFSET_FILL_VALUE', 0.0)
+
+    rngImg = isceobj.createImage()
+    rngImg.load(rgname + '.xml')
+    rngImg.setAccessMode('READ')
+    aziImg = isceobj.createImage()
+    aziImg.load(azname + '.xml')
+    aziImg.setAccessMode('READ')
+
+    width = rngImg.getWidth()
+    length = rngImg.getLength()
+
+    if (aziImg.getWidth() != width) or (aziImg.getLength() != length):
+        logger.warning(
+            'geo2rdr offset size mismatch, skip diagnostic/mask: az=(%d,%d) rg=(%d,%d)',
+            aziImg.getWidth(),
+            aziImg.getLength(),
+            width,
+            length,
+        )
+        return rngImg, aziImg, rgname
+
+    az_dtype = _infer_offset_dtype(azname, width, length)
+    rg_dtype = _infer_offset_dtype(rgname, width, length)
+
+    az = np.memmap(azname, dtype=az_dtype, mode='r', shape=(length, width))
+    rg = np.memmap(rgname, dtype=rg_dtype, mode='r', shape=(length, width))
+
+    valid = _valid_mask(az, nodata) & _valid_mask(rg, nodata)
+    total = int(width) * int(length)
+    valid_count = int(np.count_nonzero(valid))
+    invalid_count = total - valid_count
+    valid_ratio = float(valid_count) / float(max(total, 1))
+    bbox = _valid_bbox(valid)
+
+    if valid_count > 0:
+        az_valid = az[valid].astype(np.float64, copy=False)
+        rg_valid = rg[valid].astype(np.float64, copy=False)
+        logger.info(
+            'geo2rdr offsets diagnostic: valid=%d/%d (%.2f%%), invalid=%d, '
+            'valid_bbox=[row:%s, col:%s], az[min,max,mean]=[%.4f, %.4f, %.4f], '
+            'rg[min,max,mean]=[%.4f, %.4f, %.4f], nodata=%.1f',
+            valid_count,
+            total,
+            100.0 * valid_ratio,
+            invalid_count,
+            'NA' if bbox is None else '%d..%d' % (bbox[0], bbox[1]),
+            'NA' if bbox is None else '%d..%d' % (bbox[2], bbox[3]),
+            float(np.min(az_valid)),
+            float(np.max(az_valid)),
+            float(np.mean(az_valid)),
+            float(np.min(rg_valid)),
+            float(np.max(rg_valid)),
+            float(np.mean(rg_valid)),
+            nodata,
+        )
+    else:
+        logger.warning(
+            'geo2rdr offsets diagnostic: no valid pixels found in az/range offsets (nodata=%.1f).',
+            nodata,
+        )
+
+    if not enable_mask:
+        del rg
+        del az
+        return rngImg, aziImg, rgname
+
+    az_out = azname + '.masked'
+    rg_out = rgname + '.masked'
+    az_w = np.memmap(az_out, dtype=az_dtype, mode='w+', shape=(length, width))
+    rg_w = np.memmap(rg_out, dtype=rg_dtype, mode='w+', shape=(length, width))
+
+    az_w[:, :] = az[:, :]
+    rg_w[:, :] = rg[:, :]
+    az_w[~valid] = fill_value
+    rg_w[~valid] = fill_value
+    az_w.flush()
+    rg_w.flush()
+    del az_w
+    del rg_w
+
+    if emit_mask:
+        mask_name = azname + '.validmask'
+        mask_w = np.memmap(mask_name, dtype=np.uint8, mode='w+', shape=(length, width))
+        mask_w[:, :] = valid.astype(np.uint8, copy=False)
+        mask_w.flush()
+        del mask_w
+        _render_like(azname, mask_name, np.uint8)
+
+    del rg
+    del az
+
+    logger.info(
+        'geo2rdr offsets sanitized with shared-valid mask: invalid pixels set to %.4f '
+        '(ISCE_GEO2RDR_OFFSET_MASK_ENABLE=1).',
+        fill_value,
+    )
+
+    rngImg = _render_like(rgname, rg_out, rg_dtype)
+    aziImg = _render_like(azname, az_out, az_dtype)
+    return rngImg, aziImg, rg_out
+
+
+def _load_external_registration_meta(misreg_file):
+    if not glob.glob(misreg_file + '*'):
+        return None
+    try:
+        db = shelve.open(misreg_file, flag='r')
+    except Exception:
+        return None
+    try:
+        return db.get('external_registration', None)
+    finally:
+        db.close()
+
+
+def _extract_initial_integer_offset(ext_meta):
+    if not isinstance(ext_meta, dict):
+        return 0.0, 0.0
+    init = ext_meta.get('initial_integer_offset', None)
+    if not isinstance(init, dict):
+        return 0.0, 0.0
+    try:
+        az = float(init.get('azimuth', 0.0))
+    except Exception:
+        az = 0.0
+    try:
+        rg = float(init.get('range', 0.0))
+    except Exception:
+        rg = 0.0
+    return az, rg
+
+
+def _write_constant_offset_image(filename, width, length, value, dtype=np.float64):
+    arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(int(length), int(width)))
+    arr[:, :] = float(value)
+    arr.flush()
+    del arr
+
+    img = isceobj.createImage()
+    img.setFilename(filename)
+    img.setWidth(int(width))
+    img.setLength(int(length))
+    img.setAccessMode('READ')
+    img.bands = 1
+    if dtype == np.float64:
+        img.dataType = 'DOUBLE'
+    else:
+        img.dataType = 'FLOAT'
+    img.scheme = 'BIP'
+    img.renderHdr()
+    return img
+
+
+def _prepare_external_initial_offset_images(offsets_dir, width, length, init_az, init_rg):
+    azname = os.path.join(offsets_dir, 'external_initial_azimuth.off')
+    rgname = os.path.join(offsets_dir, 'external_initial_range.off')
+    azimg = _write_constant_offset_image(azname, width, length, init_az, dtype=np.float64)
+    rgimg = _write_constant_offset_image(rgname, width, length, init_rg, dtype=np.float64)
+    return rgimg, azimg, rgname
+
+
 def runResampleSlc(self, kind='coarse'):
     '''
     Kind can either be coarse, refined or fine.
@@ -159,18 +385,50 @@ def runResampleSlc(self, kind='coarse'):
     rObj.azimuthOffsetsPoly = azpoly
     rObj.rangeOffsetsPoly = rgpoly
     rObj.imageIn = inimg
+    ext_meta = _load_external_registration_meta(misregFile) if (kind == 'refined') else None
+    use_external_only = bool(ext_meta) and (
+        str(ext_meta.get('resample_mode', '')).strip().lower() in ('external_only', 'external-only')
+    )
 
     #Since the app is based on geometry module we expect pixel-by-pixel offset
     #field
     offsetsDir = self.insar.offsetsDirname 
+    os.makedirs(offsetsDir, exist_ok=True)
     
     # Modified by V. Brancato 10.10.2019
     #rgname = os.path.join(offsetsDir, self.insar.rangeOffsetFilename)
     
     if kind in ['coarse', 'refined']:
-        azname = os.path.join(offsetsDir, self.insar.azimuthOffsetFilename)
-        rgname = os.path.join(offsetsDir, self.insar.rangeOffsetFilename)
-        flatten = True
+        if (kind == 'refined') and use_external_only:
+            init_az, init_rg = _extract_initial_integer_offset(ext_meta)
+            width = min(
+                int(referenceFrame.getImage().getWidth()),
+                int(secondaryFrame.getImage().getWidth()),
+            )
+            length = min(
+                int(referenceFrame.getImage().getLength()),
+                int(secondaryFrame.getImage().getLength()),
+            )
+            logger.info(
+                'Refined resample uses external-only offsets (no geo2rdr/coarse): '
+                'initial_integer_offset=(az=%.3f, rg=%.3f), output_shape=%dx%d.',
+                float(init_az),
+                float(init_rg),
+                int(length),
+                int(width),
+            )
+            rngImg, aziImg, rgname_for_flatten = _prepare_external_initial_offset_images(
+                offsetsDir,
+                width,
+                length,
+                init_az,
+                init_rg,
+            )
+            flatten = True
+        else:
+            azname = os.path.join(offsetsDir, self.insar.azimuthOffsetFilename)
+            rgname = os.path.join(offsetsDir, self.insar.rangeOffsetFilename)
+            flatten = True
     else:
         if self.doRubbersheetingAzimuth:
            print('Rubbersheeting in azimuth is turned on, taking azimuth cross-correlation offsets')
@@ -189,13 +447,25 @@ def runResampleSlc(self, kind='coarse'):
            rgname = os.path.join(offsetsDir, self.insar.rangeOffsetFilename)
            flatten=True
     
-    rngImg = isceobj.createImage()
-    rngImg.load(rgname + '.xml')
-    rngImg.setAccessMode('READ')
+    if kind in ['coarse', 'refined']:
+        if (kind == 'refined') and use_external_only:
+            pass
+        else:
+            rgname_for_flatten = rgname
+            rngImg, aziImg, rgname_for_flatten = _prepare_geo2rdr_offset_images(
+                azname,
+                rgname,
+                force_mask=(kind == 'coarse'),
+            )
+    else:
+        rgname_for_flatten = rgname
+        rngImg = isceobj.createImage()
+        rngImg.load(rgname + '.xml')
+        rngImg.setAccessMode('READ')
 
-    aziImg = isceobj.createImage()
-    aziImg.load(azname + '.xml')
-    aziImg.setAccessMode('READ')
+        aziImg = isceobj.createImage()
+        aziImg.load(azname + '.xml')
+        aziImg.setAccessMode('READ')
 
     width = rngImg.getWidth()
     length = rngImg.getLength()
@@ -210,7 +480,7 @@ def runResampleSlc(self, kind='coarse'):
     # If rgpoly is applied for interpolation but not included in flattening,
     # residual fringes can remain in topophase.flat.
     if flatten and (rgpoly is not None):
-        merged = _merge_range_poly_into_raster(rgname, width, length, rgpoly)
+        merged = _merge_range_poly_into_raster(rgname_for_flatten, width, length, rgpoly)
         if merged is not None:
             rngImg = merged
             rObj.rangeOffsetsPoly = None

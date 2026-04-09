@@ -32,6 +32,7 @@ from iscesys.Component.Component import Component,Port
 from iscesys.Compatibility import Compatibility
 Compatibility.checkPythonVersion()
 from mroipac.ampcor import ampcor
+from mroipac.ampcor import isce3_engine
 from isceobj.Util.mathModule import is_power2
 #from isceobj.Util.decorators import use_api
 
@@ -252,6 +253,14 @@ DISPLAY_FLAG = Component.Parameter('displayFlag',
         type = bool,
         doc  = 'Display debugging information.')
 
+ENGINE = Component.Parameter(
+        'engine',
+        public_name='ENGINE',
+        default='legacy',
+        type=str,
+        mandatory=False,
+        doc='Correlation engine selector: legacy|isce3_cpu|isce3_gpu.')
+
 class Ampcor(Component):
 
     family = 'ampcor'
@@ -287,7 +296,8 @@ class Ampcor(Component):
                       BAND2,
                       MARGIN,
                       DEBUG_FLAG,
-                      DISPLAY_FLAG)
+                      DISPLAY_FLAG,
+                      ENGINE)
 
 #    @use_api
     def ampcor(self,slcImage1 = None,slcImage2 = None, band1=None, band2=None):
@@ -331,19 +341,82 @@ class Ampcor(Component):
         self.checkWindows()
         self.checkSkip()
 
-        self.allocateArrays()
-        self.setState()
-        
-#        self.checkInitialization()
-#        self.checkImageLimits()
-       
-        b1 = int(self.band1)
-        b2 = int(self.band2)
-        ampcor.ampcor_Py(slcAccessor1,slcAccessor2, b1, b2)
-        
-        self.getState()
-        self.deallocateArrays()
+        engine = isce3_engine.normalize_engine(getattr(self, 'engine', 'legacy'))
 
+        if engine == isce3_engine.ENGINE_LEGACY:
+            self.allocateArrays()
+            self.setState()
+
+            b1 = int(self.band1)
+            b2 = int(self.band2)
+            ampcor.ampcor_Py(slcAccessor1,slcAccessor2, b1, b2)
+
+            self.getState()
+            self.deallocateArrays()
+        else:
+            self._run_isce3_ampcor(engine)
+
+        return
+
+    def _run_isce3_ampcor(self, engine):
+        """
+        Run ampcor using isce3 CPU/GPU implementation and map outputs
+        to the legacy isce2 arrays consumed by getOffsetField().
+        """
+        ref_name = isce3_engine.resolve_image_name(self.slcImage1)
+        sec_name = isce3_engine.resolve_image_name(self.slcImage2)
+        if not ref_name:
+            raise ValueError('Unable to resolve reference image filename for isce3 ampcor.')
+        if not sec_name:
+            raise ValueError('Unable to resolve secondary image filename for isce3 ampcor.')
+
+        corr_stat = max(5, 2 * int(self.zoomWindowSize) + 5)
+        results = isce3_engine.run_ampcor_engine(
+            engine=engine,
+            reference_path=ref_name,
+            secondary_path=sec_name,
+            reference_width=int(self.lineLength1),
+            reference_length=int(self.fileLength1),
+            secondary_width=int(self.lineLength2),
+            secondary_length=int(self.fileLength2),
+            first_sample_across=int(self.firstSampleAcross),
+            first_sample_down=int(self.firstSampleDown),
+            skip_sample_across=int(self.skipSampleAcross),
+            skip_sample_down=int(self.skipSampleDown),
+            number_window_across=int(self.numberLocationAcross),
+            number_window_down=int(self.numberLocationDown),
+            window_size_width=int(self.windowSizeWidth),
+            window_size_height=int(self.windowSizeHeight),
+            search_window_size_width=int(self.searchWindowSizeWidth),
+            search_window_size_height=int(self.searchWindowSizeHeight),
+            across_gross_offset=int(self.acrossGrossOffset),
+            down_gross_offset=int(self.downGrossOffset),
+            oversampling_factor=int(self.oversamplingFactor),
+            zoom_window_size=int(self.zoomWindowSize),
+            corr_surface_oversampling_method=0,
+            raw_data_oversampling_factor=1,
+            corr_stat_window_size=corr_stat,
+            deramp_method=1,
+            deramp_axis=0,
+            device_id=0,
+            n_streams=(2 if engine == isce3_engine.ENGINE_ISCE3_GPU else 1),
+            chunk_window_across=min(64, int(self.numberLocationAcross)),
+            chunk_window_down=1,
+            mmap_size_gb=8,
+            use_mmap=1,
+            output_prefix=None,
+            cleanup_workdir=True,
+        )
+
+        self.numRows = int(results['num_rows'])
+        self.locationAcross = results['location_across'].tolist()
+        self.locationAcrossOffset = results['location_across_offset'].tolist()
+        self.locationDown = results['location_down'].tolist()
+        self.locationDownOffset = results['location_down_offset'].tolist()
+        self.snrRet = results['snr'].tolist()
+        self.cov1Ret = results['cov1'].tolist()
+        self.cov2Ret = results['cov2'].tolist()
+        self.cov3Ret = results['cov3'].tolist()
         return
 
     def checkTypes(self):
@@ -604,6 +677,10 @@ class Ampcor(Component):
     def setDisplayFlag(self, var):
         self.displayFlag = bool(var)
         return
+
+    def setEngine(self, var):
+        self.engine = isce3_engine.normalize_engine(var)
+        return
     
     def setReferenceSlcImage(self,im):
         self.slcImage1 = im
@@ -830,6 +907,7 @@ class Ampcor(Component):
         self.numRows = None
         self.winsizeFilt = 1
         self.oversamplingFactorFilt = 64
+        self.engine = isce3_engine.normalize_engine(getattr(self, 'engine', 'legacy'))
         self.dictionaryOfVariables = { \
                                       'IMAGETYPE1' : ['imageDataType1', 'str', 'optional'], \
                                       'IMAGETYPE2' : ['imageDataType2', 'str', 'optional'], \
@@ -845,7 +923,8 @@ class Ampcor(Component):
                                       'PRF2' : ['prf2', 'float','optional'], \
                                       'RANGE_SPACING1' : ['rangeSpacing1', 'float', 'optional'], \
                                       'RANGE_SPACING2' : ['rangeSpacing2', 'float', 'optional'], \
-                                      'DEBUG_FLAG' : ['debugFlag', 'str','optional'] \
+                                      'DEBUG_FLAG' : ['debugFlag', 'str','optional'], \
+                                      'ENGINE' : ['engine', 'str', 'optional'] \
                                       }
         self.dictionaryOfOutputVariables = { \
                                             'LOCATION_ACROSS' : 'locationAcross', \

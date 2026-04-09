@@ -1097,7 +1097,52 @@ def _integrated_external_config():
         if os.environ.get('ISCE_EXTERNAL_REGISTRATION_FINE_SAMPLING_STRIDE') is not None
         else 'ISCE_EXTERNAL_REGISTRATION_FINE_SPACING'
     )
+    max_points_cap = _safe_int_env('ISCE_EXTERNAL_REGISTRATION_MAX_POINTS_CAP', 120 * 120)
+    if max_points_cap <= 0:
+        max_points_cap = 120 * 120
+    max_points_cfg = _safe_int_env('ISCE_EXTERNAL_REGISTRATION_MAX_POINTS', max_points_cap)
+    if max_points_cfg <= 0:
+        max_points_cfg = max_points_cap
+    max_points_cfg = min(int(max_points_cfg), int(max_points_cap))
+
     cfg = {
+        'staged_enable': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_STAGED_ENABLE', True),
+        'stage1_disable': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_DISABLE', True),
+        'stage1_source': os.environ.get('ISCE_EXTERNAL_REGISTRATION_STAGE1_SOURCE', 'geo2rdr_mean'),
+        'stage1_require_geo2rdr': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_REQUIRE_GEO2RDR', True),
+        'stage1_geo2rdr_nodata': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_GEO2RDR_NODATA', -999999.0),
+        'use_geo2rdr_valid_mask': _parse_bool_env(
+            'ISCE_EXTERNAL_REGISTRATION_GEO2RDR_VALID_MASK_ENABLE',
+            True,
+        ),
+        'resample_mode': os.environ.get(
+            'ISCE_EXTERNAL_REGISTRATION_RESAMPLE_MODE',
+            'geo2rdr_plus_misreg',
+        ),
+        'stage1_window': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_WINDOW', 2048),
+        'stage1_search_half': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_SEARCH_HALF', 1024),
+        'stage1_grid_size': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_GRID_SIZE', 4),
+        'stage1_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_QUALITY', 0.05),
+        'stage1_min_valid': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_MIN_VALID', 4),
+        'stage1_outlier_sigma': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_OUTLIER_SIGMA', 2.5),
+        'stage1_outlier_max_iterations': _safe_int_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE1_OUTLIER_MAX_ITERATIONS',
+            8,
+        ),
+        'stage2_windows': _safe_int_list_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_WINDOWS', [256, 512, 1024]),
+        'stage2_search_half_scale': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_SCALE',
+            0.5,
+        ),
+        'stage2_search_half_min': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_MIN', 16),
+        'stage2_search_half_max': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_MAX', 1024),
+        'stage2_grid_size': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_GRID_SIZE', 4),
+        'stage2_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_QUALITY', 0.05),
+        'stage2_min_valid': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_MIN_VALID', 4),
+        'stage2_prefer_larger_window': _parse_bool_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_PREFER_LARGER_WINDOW',
+            True,
+        ),
         'coarse_window': _safe_int_env(coarse_template_env, 256),
         'coarse_multiscale': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_COARSE_MULTISCALE', True),
         'coarse_window_factors': _safe_float_list_env(
@@ -1139,13 +1184,33 @@ def _integrated_external_config():
             'ISCE_EXTERNAL_REGISTRATION_COARSE_SPREAD_MARGIN',
             2.0,
         ),
+        'coarse_pass_zero_offset_to_fine': _parse_bool_env(
+            'ISCE_EXTERNAL_REGISTRATION_COARSE_ZERO_OFFSET_FOR_FINE',
+            False,
+        ),
         'fine_window': _safe_int_env(fine_template_env, 128),
+        'fine_force_search_half_from_window': _parse_bool_env(
+            'ISCE_EXTERNAL_REGISTRATION_FINE_FORCE_SEARCH_HALF_FROM_WINDOW',
+            True,
+        ),
+        'fine_force_search_half_to_half_window': _parse_bool_env(
+            'ISCE_EXTERNAL_REGISTRATION_FINE_FORCE_SEARCH_HALF_TO_HALF_WINDOW',
+            True,
+        ),
+        'fine_force_search_half_scale': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_FINE_FORCE_SEARCH_HALF_SCALE',
+            0.25,
+        ),
+        'fine_search_scale': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_FINE_SEARCH_SCALE', 0.25),
+        'fine_search_min': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_SEARCH_MIN', 16),
+        'fine_search_max': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_SEARCH_MAX', 128),
         'fine_spacing': _safe_int_env(fine_stride_env, 128),
         'fine_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_FINE_QUALITY', 0.05),
         'fine_workers': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_WORKERS', 0),
         'fine_chunk_size': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_CHUNK_SIZE', 128),
         'precompute_amplitude': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_PRECOMPUTE_AMP', True),
-        'max_points': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_MAX_POINTS', 0),
+        'max_points': int(max_points_cfg),
+        'max_points_cap': int(max_points_cap),
         'max_iterations': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_MAX_ITERATIONS', 8),
         'sigma_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_SIGMA_THRESHOLD', 2.5),
         'min_points': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_MIN_POINTS', 36),
@@ -1698,7 +1763,9 @@ def runRefineSecondaryTiming(self):
     referenceFrame = self._insar.loadProduct(self._insar.referenceSlcCropProduct)
     referenceSlc = referenceFrame.getImage().filename
 
-    secondarySlc = os.path.join(self.insar.coregDirname, self._insar.coarseCoregFilename)
+    # External registration should directly use secondarySlcCropProduct.
+    # If normalization generated *_norm.xml, secondarySlcCropProduct already points to it.
+    secondarySlc = secondaryFrame.getImage().filename
 
     rgratio = referenceFrame.instrument.getRangePixelSize() / secondaryFrame.instrument.getRangePixelSize()
     azratio = secondaryFrame.PRF / referenceFrame.PRF
@@ -1725,12 +1792,39 @@ def runRefineSecondaryTiming(self):
     if external_enabled:
         try:
             ext_cfg = _integrated_external_config()
+            offsets_dir = self.insar.offsetsDirname
+            ext_cfg['stage1_geo2rdr_azimuth_offset'] = os.path.join(
+                offsets_dir,
+                self.insar.azimuthOffsetFilename,
+            )
+            ext_cfg['stage1_geo2rdr_range_offset'] = os.path.join(
+                offsets_dir,
+                self.insar.rangeOffsetFilename,
+            )
+            external_secondary_slc = secondarySlc
+            if _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_USE_COARSE_COREG_FOR_STAGE23', True):
+                coarse_coreg = os.path.join(
+                    self.insar.coregDirname,
+                    self._insar.coarseCoregFilename,
+                )
+                if os.path.exists(coarse_coreg) and os.path.exists(coarse_coreg + '.xml'):
+                    external_secondary_slc = coarse_coreg
+                    logger.info(
+                        'Integrated external registration stage-2/3 input switched to coarse coreg SLC: %s',
+                        external_secondary_slc,
+                    )
+                else:
+                    logger.warning(
+                        'Requested coarse_coreg input for external registration stage-2/3, '
+                        'but file is missing: %s. Fallback to secondary crop SLC.',
+                        coarse_coreg,
+                    )
             ext_gates = _integrated_external_quality_gates()
             logger.info('Running integrated external registration with config: %s', ext_cfg)
             logger.info('Integrated external registration quality gates: %s', ext_gates)
             azpoly, rgpoly, ext_meta = estimate_misregistration_polys(
                 referenceSlc,
-                secondarySlc,
+                external_secondary_slc,
                 az_ratio=azratio,
                 rg_ratio=rgratio,
                 config=ext_cfg,

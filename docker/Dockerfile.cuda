@@ -11,7 +11,7 @@ ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 # APT mirror controls (default to mainland China mirror).
 ARG USE_CN_MIRROR=true
-ARG APT_MIRROR=mirrors.aliyun.com
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
 ARG BUILD_JOBS=8
 # Set to your GPU architecture list, e.g. "61;86;89".
 # For CMake <= 3.22, special values like "all-major" may not be handled
@@ -121,12 +121,18 @@ ARG CUDA_IMAGE=nvidia/cuda
 FROM ${CUDA_IMAGE}:${CUDA_TAG}-runtime-ubuntu22.04
 
 ENV LANG=en_US.UTF-8
-ENV TZ=US/Pacific
+ENV TZ=Asia/Shanghai
 ARG DEBIAN_FRONTEND=noninteractive
 ARG USE_CN_MIRROR=true
-ARG APT_MIRROR=mirrors.aliyun.com
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+# Ampcor engine defaults:
+# - isce3_gpu: prefer integrated isce3-style GPU engine
+# - isce3_cpu: integrated isce3-style CPU engine
+# - legacy: original isce2 ampcor engine
+ENV ISCE_AMPCOR_ENGINE=isce3_gpu
+ENV ISCE_GPU_AMPCOR_ENGINE=isce3_gpu
 
 # Runtime optional installs
 ARG INSTALL_GMT=true
@@ -237,6 +243,7 @@ RUN set -ex \
 RUN set -ex \
  && python3 - <<'PY'
 import importlib
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -280,11 +287,34 @@ for name in modules:
         if not hasattr(module, symbol):
             raise RuntimeError('{0} is missing {1}'.format(name, symbol))
 
+ampcor_modules = [
+    'mroipac.ampcor.Ampcor',
+    'mroipac.ampcor.isce3_engine',
+    'mroipac.ampcor.isce3_bundled',
+]
+for name in ampcor_modules:
+    importlib.import_module(name)
+
+from mroipac.ampcor import isce3_bundled
+cpu_obj = isce3_bundled.BundledPyCPUAmpcor()
+gpu_obj = isce3_bundled.BundledPyCuAmpcor()
+for obj, label in ((cpu_obj, 'BundledPyCPUAmpcor'), (gpu_obj, 'BundledPyCuAmpcor')):
+    if not hasattr(obj, 'derampMethod'):
+        raise RuntimeError('{0} missing derampMethod.'.format(label))
+    if not hasattr(obj, 'derampAxis'):
+        raise RuntimeError('{0} missing derampAxis.'.format(label))
+
+pycu_spec = importlib.util.find_spec('contrib.PyCuAmpcor.PyCuAmpcor')
+if pycu_spec is None:
+    print('PyCuAmpcor module not found during build validation.')
+else:
+    print('PyCuAmpcor module detected at:', pycu_spec.origin)
+
 stack_norm = Path('/opt/isce2/contrib/stack/stripmapStack/normalizeSecondarySampling.py')
 if not stack_norm.exists():
     raise RuntimeError('Missing stripmapStack normalization script: {0}'.format(stack_norm))
 
-print('ISCE2 validation hooks and stripmapStack normalization script verified in CUDA container.')
+print('ISCE2 validation hooks, ampcor adapters, and stripmapStack normalization script verified in CUDA container.')
 PY
 
 # MintPy entrypoint wrapper

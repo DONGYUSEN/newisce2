@@ -12,6 +12,30 @@ from isceobj.Util.Poly2D import Poly2D
 
 
 _DEFAULT_CONFIG = {
+    'staged_enable': True,
+    'stage1_disable': False,
+    'stage1_source': 'geo2rdr_mean',
+    'stage1_require_geo2rdr': True,
+    'stage1_geo2rdr_azimuth_offset': None,
+    'stage1_geo2rdr_range_offset': None,
+    'stage1_geo2rdr_nodata': -999999.0,
+    'use_geo2rdr_valid_mask': True,
+    'resample_mode': 'geo2rdr_plus_misreg',
+    'stage1_window': 2048,
+    'stage1_search_half': 1024,
+    'stage1_grid_size': 4,
+    'stage1_quality_threshold': 0.05,
+    'stage1_min_valid': 4,
+    'stage1_outlier_sigma': 2.5,
+    'stage1_outlier_max_iterations': 8,
+    'stage2_windows': [256, 512, 1024],
+    'stage2_search_half_scale': 0.5,
+    'stage2_search_half_min': 16,
+    'stage2_search_half_max': 1024,
+    'stage2_grid_size': 4,
+    'stage2_quality_threshold': 0.05,
+    'stage2_min_valid': 4,
+    'stage2_prefer_larger_window': True,
     'coarse_window': 256,
     'coarse_multiscale': True,
     'coarse_window_factors': [0.5, 1.0, 2.0],
@@ -29,10 +53,14 @@ _DEFAULT_CONFIG = {
     'coarse_auto_efficiency_balance': True,
     'coarse_quality_margin_for_smaller_window': 0.03,
     'coarse_spread_margin_for_smaller_window': 2.0,
+    'coarse_pass_zero_offset_to_fine': False,
     'fine_large_coarse_threshold': 1024,
     'fine_window_cap_for_large_coarse': 1024,
     'fine_large_coarse_grid_size': 60,
     'fine_window': 128,
+    'fine_force_search_half_from_window': True,
+    'fine_force_search_half_to_half_window': True,
+    'fine_force_search_half_scale': 0.25,
     'fine_search_scale': 0.25,
     'fine_search_min': 16,
     'fine_search_max': 128,
@@ -41,7 +69,8 @@ _DEFAULT_CONFIG = {
     'fine_workers': 0,
     'fine_chunk_size': 128,
     'precompute_amplitude': True,
-    'max_points': 0,
+    'max_points': 120 * 120,
+    'max_points_cap': 120 * 120,
     'max_iterations': 8,
     'sigma_threshold': 2.5,
     'min_points': 36,
@@ -115,6 +144,17 @@ def _normalize_slc_path(path):
     return path
 
 
+def _normalize_image_path(path):
+    if path is None:
+        return None
+    p = str(path).strip()
+    if not p:
+        return None
+    if p.endswith('.xml'):
+        return p[:-4]
+    return p
+
+
 def _slc_dtype(dtype_name):
     if not dtype_name:
         return np.complex64
@@ -126,6 +166,18 @@ def _slc_dtype(dtype_name):
         'CFLOAT64': np.complex128,
     }
     return mapping.get(key, np.complex64)
+
+
+def _offset_dtype(dtype_name):
+    if not dtype_name:
+        return np.float32
+    key = str(dtype_name).strip().upper()
+    mapping = {
+        'DOUBLE': np.float64,
+        'FLOAT': np.float32,
+        'REAL': np.float32,
+    }
+    return mapping.get(key, np.float32)
 
 
 def _read_slc_as_memmap(path):
@@ -147,6 +199,106 @@ def _read_slc_as_memmap(path):
     if np.iscomplexobj(data):
         return data
     return np.asarray(data, dtype=np.float32).astype(np.complex64)
+
+
+def _read_real_image_as_memmap(path):
+    img_path = _normalize_image_path(path)
+    if img_path is None:
+        raise RuntimeError('Image path is not configured.')
+    xml_path = img_path + '.xml'
+
+    if not os.path.exists(img_path):
+        raise RuntimeError('Image file does not exist: {0}'.format(img_path))
+    if not os.path.exists(xml_path):
+        raise RuntimeError('Image XML does not exist: {0}'.format(xml_path))
+
+    img = isceobj.createImage()
+    img.load(xml_path)
+    width = int(img.getWidth())
+    length = int(img.getLength())
+    dtype = _offset_dtype(getattr(img, 'dataType', None))
+    data = np.memmap(img_path, dtype=dtype, mode='r', shape=(length, width))
+    return data, width, length, dtype
+
+
+def _build_geo2rdr_sampling_guard(cfg, target_shape, logger=None):
+    if not bool(cfg.get('use_geo2rdr_valid_mask', True)):
+        return None
+
+    az_path = _normalize_image_path(cfg.get('stage1_geo2rdr_azimuth_offset'))
+    rg_path = _normalize_image_path(cfg.get('stage1_geo2rdr_range_offset'))
+    if (az_path is None) or (rg_path is None):
+        if logger is not None:
+            logger.warning(
+                'External registration geo2rdr valid-mask guard skipped: offset paths are missing.'
+            )
+        return None
+
+    try:
+        az, az_w, az_l, _ = _read_real_image_as_memmap(az_path)
+        rg, rg_w, rg_l, _ = _read_real_image_as_memmap(rg_path)
+    except Exception as err:
+        if logger is not None:
+            logger.warning(
+                'External registration geo2rdr valid-mask guard skipped: cannot load offsets (%s).',
+                str(err),
+            )
+        return None
+
+    if (az_w != rg_w) or (az_l != rg_l):
+        if logger is not None:
+            logger.warning(
+                'External registration geo2rdr valid-mask guard skipped: shape mismatch az=%dx%d rg=%dx%d.',
+                int(az_l),
+                int(az_w),
+                int(rg_l),
+                int(rg_w),
+            )
+        return None
+
+    target_h = int(target_shape[0])
+    target_w = int(target_shape[1])
+    guard_h = min(target_h, int(az_l))
+    guard_w = min(target_w, int(az_w))
+    if (guard_h <= 0) or (guard_w <= 0):
+        return None
+
+    if logger is not None:
+        logger.info(
+            'External registration geo2rdr valid-mask guard enabled: shape=%dx%d, nodata=%.1f.',
+            int(guard_h),
+            int(guard_w),
+            float(cfg.get('stage1_geo2rdr_nodata', -999999.0)),
+        )
+
+    return {
+        'az': az,
+        'rg': rg,
+        'height': int(guard_h),
+        'width': int(guard_w),
+        'nodata': float(cfg.get('stage1_geo2rdr_nodata', -999999.0)),
+        'az_path': str(az_path),
+        'rg_path': str(rg_path),
+    }
+
+
+def _geo2rdr_guard_valid(guard, row, col):
+    if guard is None:
+        return True
+
+    rr = int(np.rint(float(row)))
+    cc = int(np.rint(float(col)))
+    if (rr < 0) or (cc < 0) or (rr >= int(guard['height'])) or (cc >= int(guard['width'])):
+        return False
+
+    azv = float(guard['az'][rr, cc])
+    rgv = float(guard['rg'][rr, cc])
+    nodata = float(guard['nodata'])
+    if (not np.isfinite(azv)) or (not np.isfinite(rgv)):
+        return False
+    if (azv == nodata) or (rgv == nodata):
+        return False
+    return True
 
 
 def _coerce_hw_pair(value, default=None):
@@ -776,12 +928,27 @@ def _coarse_registration(master_amp, slave_amp, cfg, logger=None):
             }
         )
 
+    best_az = float(best['azimuth_offset'])
+    best_rg = float(best['range_offset'])
+    pass_zero_offset = bool(cfg.get('coarse_pass_zero_offset_to_fine', False))
+    coarse_for_fine_az = 0.0 if pass_zero_offset else best_az
+    coarse_for_fine_rg = 0.0 if pass_zero_offset else best_rg
+    if (logger is not None) and pass_zero_offset:
+        logger.info(
+            'External coarse-to-fine bridge: forcing coarse offsets to zero for fine stage '
+            '(estimated coarse az=%.4f rg=%.4f kept in diagnostics only).',
+            best_az,
+            best_rg,
+        )
+
     return {
-        'azimuth_offset': float(best['azimuth_offset']),
-        'range_offset': float(best['range_offset']),
+        'azimuth_offset': float(coarse_for_fine_az),
+        'range_offset': float(coarse_for_fine_rg),
+        'estimated_azimuth_offset': float(best_az),
+        'estimated_range_offset': float(best_rg),
         'initial_offset': (
-            float(best['azimuth_offset']),
-            float(best['range_offset']),
+            float(coarse_for_fine_az),
+            float(coarse_for_fine_rg),
         ),
         'search_range': int(best.get('search_range', 0)),
         'requested_search_range': int(best.get('requested_search_range', best.get('search_range', 0))),
@@ -822,6 +989,456 @@ def _iter_uniform_grid_points(height, width, margin, rows_count, cols_count):
     rows = np.linspace(r0, r1, nr, dtype=np.float64)
     cols = np.linspace(c0, c1, nc, dtype=np.float64)
     return [(float(r), float(c)) for r in rows for c in cols]
+
+
+def _resolve_window_and_search(window, search_half, height, width, min_window=32, min_search=4):
+    win = int(np.rint(float(window)))
+    if win % 2 != 0:
+        win += 1
+    win = max(int(min_window), win)
+
+    sh, sw = _positive_hw_pair(search_half, minimum=int(min_search))
+    shape_limit = max(2 * int(min_window) + 8, min(int(height), int(width)) - 8)
+    if win > shape_limit:
+        win = shape_limit
+    if win % 2 != 0:
+        win = max(int(min_window), win - 1)
+
+    requested_margin = max((win // 2) + int(sh), (win // 2) + int(sw))
+    max_margin = max(16.0, (0.5 * float(min(int(height), int(width)))) - 2.0)
+    if requested_margin > max_margin:
+        scale = float(max_margin) / float(max(requested_margin, 1.0))
+        win = int(np.floor(float(win) * scale))
+        if win % 2 != 0:
+            win -= 1
+        win = max(int(min_window), win)
+        sh = max(int(min_search), int(np.floor(float(sh) * scale)))
+        sw = max(int(min_search), int(np.floor(float(sw) * scale)))
+
+    return int(win), (int(sh), int(sw))
+
+
+def _collect_grid_offsets(
+    master_amp,
+    slave_amp,
+    template_window,
+    search_half,
+    gross_az,
+    gross_rg,
+    grid_size,
+    quality_threshold,
+    geo2rdr_guard=None,
+):
+    h, w = master_amp.shape
+    template_h, template_w = _positive_hw_pair(template_window, minimum=16)
+    search_h, search_w = _positive_hw_pair(search_half, minimum=0)
+
+    margin_r = max(template_h // 2 + search_h + abs(int(np.rint(gross_az))) + 2, 8)
+    margin_c = max(template_w // 2 + search_w + abs(int(np.rint(gross_rg))) + 2, 8)
+    if (h <= (2 * margin_r + 1)) or (w <= (2 * margin_c + 1)):
+        return []
+
+    rows = np.linspace(float(margin_r), float(h - margin_r - 1), max(2, int(grid_size)), dtype=np.float64)
+    cols = np.linspace(float(margin_c), float(w - margin_c - 1), max(2, int(grid_size)), dtype=np.float64)
+
+    points = []
+    for row in rows:
+        for col in cols:
+            if not _geo2rdr_guard_valid(geo2rdr_guard, row, col):
+                continue
+            one = _template_search_displacement(
+                master_amp,
+                slave_amp,
+                row,
+                col,
+                (template_h, template_w),
+                (search_h, search_w),
+                gross_az=gross_az,
+                gross_rg=gross_rg,
+            )
+            if one is None:
+                continue
+
+            total_az, total_rg, quality = one
+            if float(quality) < float(quality_threshold):
+                continue
+
+            residual_az = float(total_az) - float(gross_az)
+            residual_rg = float(total_rg) - float(gross_rg)
+            if (abs(residual_az) > float(search_h)) or (abs(residual_rg) > float(search_w)):
+                continue
+
+            points.append(
+                {
+                    'row': float(row),
+                    'col': float(col),
+                    'azimuth': float(total_az),
+                    'range': float(total_rg),
+                    'quality': float(quality),
+                    'residual_azimuth': float(residual_az),
+                    'residual_range': float(residual_rg),
+                }
+            )
+
+    return points
+
+
+def _linear_inlier_mask(points, sigma_threshold, max_iterations, min_points):
+    if len(points) < int(min_points):
+        return np.zeros(len(points), dtype=bool)
+
+    rows = np.array([p['row'] for p in points], dtype=np.float64)
+    cols = np.array([p['col'] for p in points], dtype=np.float64)
+    az = np.array([p['azimuth'] for p in points], dtype=np.float64)
+    rg = np.array([p['range'] for p in points], dtype=np.float64)
+
+    A = np.column_stack([np.ones_like(rows), rows, cols])
+    mask = np.ones(rows.shape[0], dtype=bool)
+    for _ in range(max(1, int(max_iterations))):
+        if int(np.count_nonzero(mask)) < int(min_points):
+            break
+
+        coeff_az, _, _, _ = np.linalg.lstsq(A[mask], az[mask], rcond=None)
+        coeff_rg, _, _, _ = np.linalg.lstsq(A[mask], rg[mask], rcond=None)
+        pred_az = A @ coeff_az
+        pred_rg = A @ coeff_rg
+        residual = np.sqrt((az - pred_az) ** 2 + (rg - pred_rg) ** 2)
+
+        core = residual[mask]
+        med = float(np.median(core))
+        mad = float(np.median(np.abs(core - med)))
+        sigma = max(1.4826 * mad, 1.0e-6)
+        threshold = med + float(sigma_threshold) * sigma
+        new_mask = residual <= threshold
+
+        if int(np.count_nonzero(new_mask)) < int(min_points):
+            break
+        if np.array_equal(new_mask, mask):
+            mask = new_mask
+            break
+        mask = new_mask
+
+    if int(np.count_nonzero(mask)) < int(min_points):
+        return np.zeros(len(points), dtype=bool)
+    return mask
+
+
+def _summarize_points(points):
+    if not points:
+        return {
+            'num_valid': 0,
+            'quality_median': None,
+            'spread': None,
+            'mean_azimuth': None,
+            'mean_range': None,
+        }
+
+    az = np.array([p['azimuth'] for p in points], dtype=np.float64)
+    rg = np.array([p['range'] for p in points], dtype=np.float64)
+    q = np.array([p['quality'] for p in points], dtype=np.float64)
+    return {
+        'num_valid': int(len(points)),
+        'quality_median': float(np.median(q)),
+        'spread': float(np.std(az) + np.std(rg)),
+        'mean_azimuth': float(np.mean(az)),
+        'mean_range': float(np.mean(rg)),
+    }
+
+
+def _stage1_initial_integer_offset(master_amp, slave_amp, cfg, logger=None):
+    stage1_source = str(cfg.get('stage1_source', 'geo2rdr_mean')).strip().lower()
+    if stage1_source == 'geo2rdr_mean':
+        az_path = _normalize_image_path(cfg.get('stage1_geo2rdr_azimuth_offset'))
+        rg_path = _normalize_image_path(cfg.get('stage1_geo2rdr_range_offset'))
+        nodata = float(cfg.get('stage1_geo2rdr_nodata', -999999.0))
+        require_geo2rdr = bool(cfg.get('stage1_require_geo2rdr', True))
+
+        try:
+            az, az_w, az_l, _ = _read_real_image_as_memmap(az_path)
+            rg, rg_w, rg_l, _ = _read_real_image_as_memmap(rg_path)
+
+            if (az_w != rg_w) or (az_l != rg_l):
+                raise RuntimeError(
+                    'geo2rdr offset shape mismatch: az={0}x{1}, rg={2}x{3}'.format(
+                        az_l, az_w, rg_l, rg_w
+                    )
+                )
+
+            valid = (
+                np.isfinite(az)
+                & np.isfinite(rg)
+                & (az != nodata)
+                & (rg != nodata)
+            )
+            valid_count = int(np.count_nonzero(valid))
+            total_count = int(valid.size)
+            if valid_count <= 0:
+                raise RuntimeError('geo2rdr offsets have no valid pixels (nodata={0})'.format(nodata))
+
+            mean_az = float(np.mean(az[valid], dtype=np.float64))
+            mean_rg = float(np.mean(rg[valid], dtype=np.float64))
+            init_az = int(np.trunc(mean_az))
+            init_rg = int(np.trunc(mean_rg))
+
+            if logger is not None:
+                logger.info(
+                    'External staged step-1: source=geo2rdr_mean valid=%d/%d (%.2f%%) '
+                    'mean=(az=%.6f, rg=%.6f) init_integer=(az=%d, rg=%d).',
+                    valid_count,
+                    total_count,
+                    100.0 * float(valid_count) / float(max(total_count, 1)),
+                    mean_az,
+                    mean_rg,
+                    init_az,
+                    init_rg,
+                )
+
+            return {
+                'source': 'geo2rdr_mean',
+                'offset_paths': {
+                    'azimuth': str(az_path),
+                    'range': str(rg_path),
+                },
+                'nodata': float(nodata),
+                'valid_pixels': int(valid_count),
+                'total_pixels': int(total_count),
+                'mean_offset': {'azimuth': float(mean_az), 'range': float(mean_rg)},
+                'initial_integer_offset': {'azimuth': int(init_az), 'range': int(init_rg)},
+                'disabled_large_window_probe': True,
+            }
+        except Exception as err:
+            if require_geo2rdr:
+                raise RuntimeError(
+                    'External staged step-1 failed to derive initial offset from geo2rdr: {0}'.format(str(err))
+                )
+            if logger is not None:
+                logger.warning(
+                    'External staged step-1 geo2rdr_mean unavailable (%s); fallback to large-window probe.',
+                    str(err),
+                )
+
+    h, w = master_amp.shape
+    window, search_half = _resolve_window_and_search(
+        cfg.get('stage1_window', 2048),
+        cfg.get('stage1_search_half', 1024),
+        h,
+        w,
+        min_window=64,
+        min_search=8,
+    )
+
+    raw_points = _collect_grid_offsets(
+        master_amp,
+        slave_amp,
+        template_window=(window, window),
+        search_half=search_half,
+        gross_az=0.0,
+        gross_rg=0.0,
+        grid_size=max(2, int(cfg.get('stage1_grid_size', 4))),
+        quality_threshold=float(cfg.get('stage1_quality_threshold', 0.05)),
+    )
+    min_valid = max(4, int(cfg.get('stage1_min_valid', 4)))
+    if len(raw_points) < min_valid:
+        raise RuntimeError(
+            'External staged step-1 failed: valid points={0} (<{1})'.format(len(raw_points), min_valid)
+        )
+
+    mask = _linear_inlier_mask(
+        raw_points,
+        sigma_threshold=float(cfg.get('stage1_outlier_sigma', 2.5)),
+        max_iterations=int(cfg.get('stage1_outlier_max_iterations', 8)),
+        min_points=min_valid,
+    )
+    filtered_points = [pt for keep, pt in zip(mask.tolist(), raw_points) if keep]
+    if len(filtered_points) < min_valid:
+        raise RuntimeError(
+            'External staged step-1 failed after linear filtering: kept={0} (<{1})'.format(
+                len(filtered_points),
+                min_valid,
+            )
+        )
+
+    mean_az = float(np.mean([p['azimuth'] for p in filtered_points]))
+    mean_rg = float(np.mean([p['range'] for p in filtered_points]))
+    init_az = int(np.trunc(mean_az))
+    init_rg = int(np.trunc(mean_rg))
+
+    if logger is not None:
+        logger.info(
+            'External staged step-1: template=(%d,%d) search_half=(%d,%d) raw=%d kept=%d '
+            'mean=(az=%.6f, rg=%.6f) init_integer=(az=%d, rg=%d).',
+            int(window),
+            int(window),
+            int(search_half[0]),
+            int(search_half[1]),
+            int(len(raw_points)),
+            int(len(filtered_points)),
+            float(mean_az),
+            float(mean_rg),
+            int(init_az),
+            int(init_rg),
+        )
+
+    return {
+        'template_window': {'down': int(window), 'across': int(window)},
+        'search_half': {'down': int(search_half[0]), 'across': int(search_half[1])},
+        'grid_size': int(max(2, int(cfg.get('stage1_grid_size', 4)))),
+        'raw_points': int(len(raw_points)),
+        'kept_points': int(len(filtered_points)),
+        'raw_summary': _summarize_points(raw_points),
+        'filtered_summary': _summarize_points(filtered_points),
+        'mean_offset': {'azimuth': float(mean_az), 'range': float(mean_rg)},
+        'initial_integer_offset': {'azimuth': int(init_az), 'range': int(init_rg)},
+    }
+
+
+def _stage2_select_window(master_amp, slave_amp, init_az, init_rg, cfg, logger=None, geo2rdr_guard=None):
+    h, w = master_amp.shape
+    raw_windows = cfg.get('stage2_windows', [256, 512, 1024])
+    if not raw_windows:
+        raw_windows = [int(cfg.get('fine_window', 128))]
+
+    scale = float(cfg.get('stage2_search_half_scale', 0.5))
+    min_search = max(1, int(cfg.get('stage2_search_half_min', 16)))
+    max_search = max(min_search, int(cfg.get('stage2_search_half_max', 1024)))
+    quality_threshold = float(cfg.get('stage2_quality_threshold', 0.05))
+    grid_size = max(2, int(cfg.get('stage2_grid_size', 4)))
+    min_valid = max(4, int(cfg.get('stage2_min_valid', 4)))
+    prefer_larger = bool(cfg.get('stage2_prefer_larger_window', True))
+
+    candidates = []
+    for requested in raw_windows:
+        try:
+            req = int(np.rint(float(requested)))
+        except Exception:
+            continue
+        if req <= 0:
+            continue
+
+        req_search = int(np.rint(max(1.0, float(req) * scale)))
+        req_search = max(min_search, min(max_search, req_search))
+        window, search_half = _resolve_window_and_search(
+            req,
+            (req_search, req_search),
+            h,
+            w,
+            min_window=32,
+            min_search=min_search,
+        )
+        search_half = (
+            max(min_search, min(max_search, int(search_half[0]))),
+            max(min_search, min(max_search, int(search_half[1]))),
+        )
+
+        points = _collect_grid_offsets(
+            master_amp,
+            slave_amp,
+            template_window=(window, window),
+            search_half=search_half,
+            gross_az=float(init_az),
+            gross_rg=float(init_rg),
+            grid_size=grid_size,
+            quality_threshold=quality_threshold,
+            geo2rdr_guard=geo2rdr_guard,
+        )
+        summary = _summarize_points(points)
+        status = 'ok' if len(points) >= min_valid else 'failed'
+        candidates.append(
+            {
+                'status': status,
+                'requested_window': int(req),
+                'window': int(window),
+                'template_window': {'down': int(window), 'across': int(window)},
+                'search_half': {'down': int(search_half[0]), 'across': int(search_half[1])},
+                'num_valid': int(len(points)),
+                'quality_median': summary['quality_median'],
+                'spread': summary['spread'],
+                'mean_azimuth': summary['mean_azimuth'],
+                'mean_range': summary['mean_range'],
+            }
+        )
+
+    valid = [c for c in candidates if c.get('status') == 'ok']
+    if not valid:
+        raise RuntimeError(
+            'External staged step-2 failed: no valid window candidates ({0})'.format(
+                [int(c.get('requested_window', 0)) for c in candidates]
+            )
+        )
+
+    if prefer_larger:
+        best = max(
+            valid,
+            key=lambda c: (
+                int(c.get('num_valid', 0)),
+                float(c.get('quality_median') or 0.0),
+                -float(c.get('spread') or np.inf),
+                int(c.get('window', 0)),
+            ),
+        )
+    else:
+        best = max(
+            valid,
+            key=lambda c: (
+                int(c.get('num_valid', 0)),
+                float(c.get('quality_median') or 0.0),
+                -float(c.get('spread') or np.inf),
+                -int(c.get('window', 0)),
+            ),
+        )
+
+    if logger is not None:
+        for cand in candidates:
+            if cand.get('status') == 'ok':
+                logger.info(
+                    'External staged step-2 candidate: template=(%d,%d) search_half=(%d,%d) '
+                    'valid=%d quality_median=%.5f spread=%.6f',
+                    int(cand['template_window']['down']),
+                    int(cand['template_window']['across']),
+                    int(cand['search_half']['down']),
+                    int(cand['search_half']['across']),
+                    int(cand['num_valid']),
+                    float(cand['quality_median'] or 0.0),
+                    float(cand['spread'] or 0.0),
+                )
+            else:
+                logger.info(
+                    'External staged step-2 candidate failed: template=(%d,%d) search_half=(%d,%d) valid=%d',
+                    int(cand['template_window']['down']),
+                    int(cand['template_window']['across']),
+                    int(cand['search_half']['down']),
+                    int(cand['search_half']['across']),
+                    int(cand['num_valid']),
+                )
+        logger.info(
+            'External staged step-2 selected: template=(%d,%d) search_half=(%d,%d) valid=%d '
+            'quality_median=%.5f spread=%.6f',
+            int(best['template_window']['down']),
+            int(best['template_window']['across']),
+            int(best['search_half']['down']),
+            int(best['search_half']['across']),
+            int(best['num_valid']),
+            float(best['quality_median'] or 0.0),
+            float(best['spread'] or 0.0),
+        )
+
+    return {
+        'best': best,
+        'candidates': candidates,
+        'grid_size': int(grid_size),
+        'quality_threshold': float(quality_threshold),
+        'initial_integer_offset': {'azimuth': int(init_az), 'range': int(init_rg)},
+    }
+
+
+def _points_minus_initial(points, init_az, init_rg):
+    out = []
+    for p in points:
+        one = dict(p)
+        one['azimuth'] = float(p['azimuth']) - float(init_az)
+        one['range'] = float(p['range']) - float(init_rg)
+        out.append(one)
+    return out
 
 
 def _evaluate_fine_point(
@@ -870,6 +1487,7 @@ def _fine_registration(
     coarse_window=None,
     coarse_search=None,
     logger=None,
+    geo2rdr_guard=None,
 ):
     h, w = master_amp.shape
 
@@ -896,17 +1514,55 @@ def _fine_registration(
         if window % 2 != 0:
             window -= 1
 
-    if coarse_search is None:
-        coarse_search_h = int(cfg.get('fine_search_max', 128))
-        coarse_search_w = int(cfg.get('fine_search_max', 128))
-    else:
-        coarse_search_h, coarse_search_w = _positive_hw_pair(coarse_search, minimum=1)
-    fine_search_scale = float(cfg.get('fine_search_scale', 0.25))
-    fine_search_min = max(0, int(cfg.get('fine_search_min', 16)))
+    force_from_window = bool(cfg.get('fine_force_search_half_from_window', True))
+    force_half_window = bool(cfg.get('fine_force_search_half_to_half_window', True))
+    fine_search_min = max(1, int(cfg.get('fine_search_min', 16)))
     fine_search_max = max(fine_search_min, int(cfg.get('fine_search_max', 128)))
-    search_h = max(fine_search_min, min(fine_search_max, int(np.rint(coarse_search_h * fine_search_scale))))
-    search_w = max(fine_search_min, min(fine_search_max, int(np.rint(coarse_search_w * fine_search_scale))))
-    search_half = (search_h, search_w)
+    if force_from_window:
+        if force_half_window:
+            search_h = max(1, int(window // 2))
+            search_w = max(1, int(window // 2))
+            search_half = (search_h, search_w)
+            if logger is not None:
+                logger.info(
+                    'External fine registration search_half forced to half of template window: '
+                    'template=(%d,%d) -> search_half=(%d,%d).',
+                    int(window),
+                    int(window),
+                    int(search_h),
+                    int(search_w),
+                )
+        else:
+            force_scale = float(cfg.get('fine_force_search_half_scale', cfg.get('fine_search_scale', 0.25)))
+            if force_scale <= 0.0:
+                force_scale = 0.25
+            search_h = int(np.rint(float(window) * force_scale))
+            search_w = int(np.rint(float(window) * force_scale))
+            search_h = max(fine_search_min, min(fine_search_max, search_h))
+            search_w = max(fine_search_min, min(fine_search_max, search_w))
+            search_half = (search_h, search_w)
+            if logger is not None:
+                logger.info(
+                    'External fine registration search_half forced from template window: '
+                    'template=(%d,%d) scale=%.3f clamp=[%d,%d] -> search_half=(%d,%d).',
+                    int(window),
+                    int(window),
+                    float(force_scale),
+                    int(fine_search_min),
+                    int(fine_search_max),
+                    int(search_h),
+                    int(search_w),
+                )
+    else:
+        if coarse_search is None:
+            coarse_search_h = int(cfg.get('fine_search_max', 128))
+            coarse_search_w = int(cfg.get('fine_search_max', 128))
+        else:
+            coarse_search_h, coarse_search_w = _positive_hw_pair(coarse_search, minimum=1)
+        fine_search_scale = float(cfg.get('fine_search_scale', 0.25))
+        search_h = max(fine_search_min, min(fine_search_max, int(np.rint(coarse_search_h * fine_search_scale))))
+        search_w = max(fine_search_min, min(fine_search_max, int(np.rint(coarse_search_w * fine_search_scale))))
+        search_half = (search_h, search_w)
 
     spacing = max(16, int(cfg['fine_spacing']))
     margin = (
@@ -915,6 +1571,12 @@ def _fine_registration(
         + 2
     )
     max_points = int(cfg.get('max_points', 0))
+    max_points_cap = int(cfg.get('max_points_cap', 120 * 120))
+    if max_points_cap > 0:
+        if max_points <= 0:
+            max_points = int(max_points_cap)
+        else:
+            max_points = min(int(max_points), int(max_points_cap))
     unlimited_points = (max_points <= 0)
     quality_threshold = float(cfg['fine_quality_threshold'])
     chunk_size = max(8, int(cfg.get('fine_chunk_size', 128)))
@@ -930,6 +1592,20 @@ def _fine_registration(
     else:
         grid_points = list(_iter_grid_points(h, w, spacing, margin))
         grid_mode = 'spacing_{0}'.format(spacing)
+
+    if geo2rdr_guard is not None:
+        before = len(grid_points)
+        grid_points = [
+            (row, col)
+            for row, col in grid_points
+            if _geo2rdr_guard_valid(geo2rdr_guard, row, col)
+        ]
+        if logger is not None:
+            logger.info(
+                'External fine registration applied geo2rdr valid-mask guard: kept=%d/%d candidate points.',
+                int(len(grid_points)),
+                int(before),
+            )
 
     if not grid_points:
         raise RuntimeError(
@@ -1175,19 +1851,88 @@ def estimate_misregistration_polys(
         logger=logger,
         label='secondary',
     )
+    geo2rdr_guard = _build_geo2rdr_sampling_guard(cfg, master_amp.shape, logger=logger)
 
-    coarse = _coarse_registration(master_amp, slave_amp, cfg, logger=logger)
-    points = _fine_registration(
-        master_amp,
-        slave_amp,
-        coarse_az=coarse['azimuth_offset'],
-        coarse_rg=coarse['range_offset'],
-        cfg=cfg,
-        coarse_window=coarse.get('window_size'),
-        coarse_search=coarse.get('search_range'),
-        logger=logger,
-    )
-    model = _fit_model(points, cfg)
+    staged_enable = bool(cfg.get('staged_enable', True))
+    if staged_enable:
+        stage1_disable = bool(cfg.get('stage1_disable', False))
+        if stage1_disable:
+            init_az = 0
+            init_rg = 0
+            stage1 = {
+                'disabled': True,
+                'reason': 'configured_stage1_disable',
+                'initial_integer_offset': {'azimuth': 0, 'range': 0},
+            }
+            if logger is not None:
+                logger.info(
+                    'External staged step-1 disabled by configuration; using init_integer=(az=0, rg=0).'
+                )
+        else:
+            stage1 = _stage1_initial_integer_offset(master_amp, slave_amp, cfg, logger=logger)
+            init_az = int(stage1['initial_integer_offset']['azimuth'])
+            init_rg = int(stage1['initial_integer_offset']['range'])
+
+        stage2 = _stage2_select_window(
+            master_amp,
+            slave_amp,
+            init_az=init_az,
+            init_rg=init_rg,
+            cfg=cfg,
+            logger=logger,
+            geo2rdr_guard=geo2rdr_guard,
+        )
+        best = dict(stage2['best'])
+        best_search = (
+            int(best['search_half']['down']),
+            int(best['search_half']['across']),
+        )
+        points = _fine_registration(
+            master_amp,
+            slave_amp,
+            coarse_az=float(init_az),
+            coarse_rg=float(init_rg),
+            cfg=cfg,
+            coarse_window=int(best['window']),
+            coarse_search=best_search,
+            logger=logger,
+            geo2rdr_guard=geo2rdr_guard,
+        )
+        residual_points = _points_minus_initial(points, init_az, init_rg)
+        model = _fit_model(residual_points, cfg)
+        coarse = {
+            'selection_mode': 'staged_external_registration',
+            'azimuth_offset': float(init_az),
+            'range_offset': float(init_rg),
+            'window_size': int(best['window']),
+            'search_half': dict(best['search_half']),
+            'num_valid': int(best.get('num_valid', 0)),
+            'spread': float(best.get('spread', np.inf))
+            if best.get('spread', None) is not None
+            else np.inf,
+            'quality_median': float(best.get('quality_median', 0.0))
+            if best.get('quality_median', None) is not None
+            else 0.0,
+            'candidate_summary': list(stage2['candidates']),
+        }
+    else:
+        coarse = _coarse_registration(master_amp, slave_amp, cfg, logger=logger)
+        points = _fine_registration(
+            master_amp,
+            slave_amp,
+            coarse_az=coarse['azimuth_offset'],
+            coarse_rg=coarse['range_offset'],
+            cfg=cfg,
+            coarse_window=coarse.get('window_size'),
+            coarse_search=coarse.get('search_range'),
+            logger=logger,
+            geo2rdr_guard=geo2rdr_guard,
+        )
+        model = _fit_model(points, cfg)
+        stage1 = None
+        stage2 = None
+        init_az = int(np.trunc(float(coarse.get('azimuth_offset', 0.0))))
+        init_rg = int(np.trunc(float(coarse.get('range_offset', 0.0))))
 
     azpoly = _build_poly2d(model['parameters'], model['normalization'], 'a')
     rgpoly = _build_poly2d(model['parameters'], model['normalization'], 'b')
@@ -1200,6 +1945,12 @@ def estimate_misregistration_polys(
         'reference_slc': _normalize_slc_path(reference_slc),
         'secondary_slc': _normalize_slc_path(secondary_slc),
         'coarse': coarse,
+        'staged': bool(staged_enable),
+        'initial_integer_offset': {'azimuth': int(init_az), 'range': int(init_rg)},
+        'stage1': stage1,
+        'stage2': stage2,
+        'resample_mode': str(cfg.get('resample_mode', 'geo2rdr_plus_misreg')).strip().lower(),
+        'offset_model': 'residual_poly_after_geo2rdr',
         'fit': {
             'inliers': model['inliers'],
             'total_points': model['total_points'],
@@ -1209,6 +1960,14 @@ def estimate_misregistration_polys(
         'config': {
             key: cfg[key]
             for key in sorted(cfg.keys())
+        },
+        'geo2rdr_valid_guard': {
+            'enabled': bool(geo2rdr_guard is not None),
+            'height': int(geo2rdr_guard['height']) if geo2rdr_guard is not None else 0,
+            'width': int(geo2rdr_guard['width']) if geo2rdr_guard is not None else 0,
+            'nodata': float(geo2rdr_guard['nodata']) if geo2rdr_guard is not None else None,
+            'azimuth_offset_path': str(geo2rdr_guard['az_path']) if geo2rdr_guard is not None else None,
+            'range_offset_path': str(geo2rdr_guard['rg_path']) if geo2rdr_guard is not None else None,
         },
     }
 

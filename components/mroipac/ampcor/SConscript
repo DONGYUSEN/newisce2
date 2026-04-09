@@ -49,6 +49,13 @@ srcScons = 'src/SConscript'
 SConscript(srcScons,variant_dir = envampcor['PRJ_SCONS_BUILD'] + '/' + package + '/'  + project + '/src')
 
 install = envampcor['PRJ_SCONS_INSTALL'] + '/' + package + '/' + project
-listFiles = ['Ampcor.py', 'NStage.py','DenseAmpcor.py','__init__.py']
+listFiles = [
+    'Ampcor.py',
+    'NStage.py',
+    'DenseAmpcor.py',
+    '__init__.py',
+    'isce3_engine.py',
+    'isce3_bundled.py',
+]
 envampcor.Install(install, listFiles)
 envampcor.Alias('install', install)

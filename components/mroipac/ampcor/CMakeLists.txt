@@ -19,4 +19,6 @@ InstallSameDir(
     Ampcor.py
     DenseAmpcor.py
     NStage.py
+    isce3_engine.py
+    isce3_bundled.py
     )
