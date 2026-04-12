@@ -194,6 +194,7 @@ RUN set -ex \
 import importlib
 from pathlib import Path
 import isce
+from isceobj.Sensor import createSensor
 
 modules = [
     'isceobj.InsarProc.runFilter',
@@ -217,7 +218,25 @@ stack_norm = Path('/opt/isce2/contrib/stack/stripmapStack/normalizeSecondarySamp
 if not stack_norm.exists():
     raise RuntimeError('Missing stripmapStack normalization script: {0}'.format(stack_norm))
 
-print('ISCE2 validation hooks and stripmapStack normalization script verified in container.')
+nisar_sensor_mod = importlib.import_module('isceobj.Sensor.NISAR_RSLC')
+if not hasattr(nisar_sensor_mod, 'NISAR_RSLC'):
+    raise RuntimeError('NISAR_RSLC class is missing in module: isceobj.Sensor.NISAR_RSLC')
+
+sensor = createSensor('NISAR_RSLC')
+if sensor is None:
+    raise RuntimeError('createSensor("NISAR_RSLC") returned None.')
+
+nisar_scripts = [
+    Path('/opt/isce2/contrib/stack/stripmapStack/prepareNISAR_RSLCStack.py'),
+    Path('/opt/isce2/contrib/stack/stripmapStack/unpackFrame_NISAR_RSLC.py'),
+]
+for script in nisar_scripts:
+    if not script.exists():
+        raise RuntimeError('Missing NISAR stripmapStack script: {0}'.format(script))
+    if (script.stat().st_mode & 0o111) == 0:
+        raise RuntimeError('NISAR stripmapStack script is not executable: {0}'.format(script))
+
+print('ISCE2 validation hooks, NISAR sensor, and stripmapStack scripts verified in container.')
 PY
 
 RUN set -ex \
@@ -241,6 +260,7 @@ RUN set -ex \
  && chmod +x /usr/local/bin/isce-extra-python
 
 RUN chmod +x /usr/local/bin/isce2-raster-convert
+RUN chmod +x /opt/isce2/contrib/stack/stripmapStack/prepareNISAR_RSLCStack.py /opt/isce2/contrib/stack/stripmapStack/unpackFrame_NISAR_RSLC.py
 
 ENV MINTPY_HOME=/opt/MintPy
 ENV ISCE_HOME=/usr/lib/python3.10/dist-packages/isce2
