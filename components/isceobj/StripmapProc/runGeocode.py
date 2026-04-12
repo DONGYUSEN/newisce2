@@ -123,7 +123,7 @@ def runGeocode(self, prodlist, bbox, is_offset_mode=False):
     catalog.addItem('Dem Used', demfilename, 'geocode')
 
     #####Geocode one by one
-    first = False
+    first = True
     ge = Geocodable()
     for prod in tobeGeocoded:
         objGeo = createGeozero()
@@ -131,7 +131,11 @@ def runGeocode(self, prodlist, bbox, is_offset_mode=False):
 
         ####IF statements to check for user configuration
         objGeo.snwe = snwe
-        objGeo.demCropFilename = insar.demCropFilename
+        if first:
+            objGeo.demCropFilename = insar.demCropFilename
+            first = False
+        else:
+            objGeo.demCropFilename = ''
 
 
         objGeo.dopplerCentroidCoeffs = dopplercoeff

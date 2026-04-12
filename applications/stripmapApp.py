@@ -1231,25 +1231,26 @@ class _RoiBase(Application, FrameMixin):
 
         self.step('interferogram', func=self.runInterferogram)
 
-        self.step('sub_band_interferogram', func=self.runInterferogram,
-                args=("sub",))
-
         self.step('filter', func=self.runFilter,
                   args=(self.filterStrength,))
 
-        self.step('filter_low_band', func=self.runFilter,
-                  args=(self.filterStrength,"low",))
-
-        self.step('filter_high_band', func=self.runFilter,
-                  args=(self.filterStrength,"high",))
-
         self.step('unwrap', func=self.runUnwrapper)
 
-        self.step('unwrap_low_band', func=self.runUnwrapper, args=("low",))
-
-        self.step('unwrap_high_band', func=self.runUnwrapper, args=("high",))
-
-        self.step('ionosphere', func=self.runDispersive)
+        if self.doDispersive:
+            self.step('sub_band_interferogram', func=self.runInterferogram,
+                    args=("sub",))
+            self.step('filter_low_band', func=self.runFilter,
+                      args=(self.filterStrength,"low",))
+            self.step('filter_high_band', func=self.runFilter,
+                      args=(self.filterStrength,"high",))
+            self.step('unwrap_low_band', func=self.runUnwrapper, args=("low",))
+            self.step('unwrap_high_band', func=self.runUnwrapper, args=("high",))
+            self.step('ionosphere', func=self.runDispersive)
+        else:
+            logger.info(
+                "Dispersive phase estimation disabled: skip sub-band "
+                "interferogram/filter/unwrap/ionosphere steps."
+            )
 
         self.step('geocode', func=self.runGeocode,
                 args=(self.geocode_list, self.geocode_bbox))
@@ -1324,27 +1325,28 @@ class _RoiBase(Application, FrameMixin):
         # forming the interferogram
         self.runInterferogram()
 
-        self.runInterferogram(igramSpectrum = "sub")
-
         # Filtering and estimating coherence
         self.runFilter(self.filterStrength)
-
-        self.runFilter(self.filterStrength, igramSpectrum = "low")
-
-        self.runFilter(self.filterStrength, igramSpectrum = "high")
 
         # unwrapping
         self.runUnwrapper()
 
-        self.runUnwrapper(igramSpectrum = "low")
-
-        self.runUnwrapper(igramSpectrum = "high")
-
-        self.runDispersive()
+        if self.doDispersive:
+            self.runInterferogram(igramSpectrum = "sub")
+            self.runFilter(self.filterStrength, igramSpectrum = "low")
+            self.runFilter(self.filterStrength, igramSpectrum = "high")
+            self.runUnwrapper(igramSpectrum = "low")
+            self.runUnwrapper(igramSpectrum = "high")
+            self.runDispersive()
+        else:
+            logger.info(
+                "Dispersive phase estimation disabled: skip sub-band "
+                "interferogram/filter/unwrap/ionosphere."
+            )
 
         self.runGeocode(self.geocode_list, self.geocode_bbox)
 
-        self.runGeocode(self.geocode_list, self.geocode_bbox, True)
+        self.runGeocode(self.off_geocode_list, self.geocode_bbox, True)
 
 
         self.timeEnd = time.time()
