@@ -23,6 +23,10 @@
 #define BAD_VALUE -999999.
 #define THRD_PER_RUN 128
 
+// Orbit interpolation method constants (matching Constants.h)
+#define HERMITE_METHOD 0
+#define LEGENDRE_METHOD 2
+
 struct InputImageArrs {
     double *lat;
     double *lon;
@@ -64,10 +68,10 @@ struct Poly1d {
 };
 
 __constant__ double d_inpts_double[9];
-__constant__ int d_inpts_int[3];
+__constant__ int d_inpts_int[4]; // [3] = orbitMethod
 
 // Mem usage: 27 doubles (216 bytes) per call
-__device__ int interpolateOrbit(struct Orbit *orb, double t, double *xyz, double *vel) {
+__device__ int interpolateHermiteOrbit(struct Orbit *orb, double t, double *xyz, double *vel) {
     double h[4], hdot[4], f0[4], f1[4], g0[4], g1[4];
     double sum = 0.0;
     int i;
@@ -164,6 +168,66 @@ __device__ int interpolateOrbit(struct Orbit *orb, double t, double *xyz, double
                 (((orb->svs[v0+2].pz * g0[2]) + (orb->svs[v0+2].vz * g1[2])) * h[2]) + (((orb->svs[v0+3].pz * g0[3]) + (orb->svs[v0+3].vz * g1[3])) * h[3]);
 
     return 0; // Successful interpolation
+}
+
+// 8th-order Legendre polynomial orbit interpolation (ported from Orbit.cpp)
+// Requires at least 9 state vectors. Interpolates position and velocity independently.
+__device__ int interpolateLegendreOrbit(struct Orbit *orb, double t, double *xyz, double *vel) {
+    double noemer[9] = {40320.0, -5040.0, 1440.0, -720.0, 576.0, -720.0, 1440.0, -5040.0, 40320.0};
+    double trel, coeff, teller;
+    int ii = -1;
+
+    if (orb->nVec < 9) return 1;
+    if ((t < orb->svs[0].t) || (t > orb->svs[orb->nVec-1].t)) return 1;
+
+    // Find the index of the first SV with time >= t
+    for (int i=0; i<orb->nVec; i++) {
+        if (orb->svs[i].t >= t) { ii = i; break; }
+    }
+
+    // Center the 9-point window around the interpolation point
+    ii = ii - 5;
+    if (ii < 0) ii = 0;
+    if (ii > (orb->nVec - 9)) ii = (orb->nVec - 9);
+
+    // Compute normalized time: maps [t[0], t[8]] to [0, 8]
+    trel = (8.0 * (t - orb->svs[ii].t)) / (orb->svs[ii+8].t - orb->svs[ii].t);
+
+    // Compute the product term: teller = product((trel - j) for j=0..8)
+    teller = 1.0;
+    for (int j=0; j<9; j++) teller = teller * (trel - j);
+
+    xyz[0] = 0.0; xyz[1] = 0.0; xyz[2] = 0.0;
+    vel[0] = 0.0; vel[1] = 0.0; vel[2] = 0.0;
+
+    if (teller == 0.0) {
+        // Exact hit on a node point
+        int idx = (int)trel;
+        if (idx < 0) idx = 0;
+        if (idx > 8) idx = 8;
+        xyz[0] = orb->svs[ii+idx].px; xyz[1] = orb->svs[ii+idx].py; xyz[2] = orb->svs[ii+idx].pz;
+        vel[0] = orb->svs[ii+idx].vx; vel[1] = orb->svs[ii+idx].vy; vel[2] = orb->svs[ii+idx].vz;
+    } else {
+        for (int i=0; i<9; i++) {
+            coeff = (teller / noemer[i]) / (trel - i);
+            xyz[0] += coeff * orb->svs[ii+i].px;
+            xyz[1] += coeff * orb->svs[ii+i].py;
+            xyz[2] += coeff * orb->svs[ii+i].pz;
+            vel[0] += coeff * orb->svs[ii+i].vx;
+            vel[1] += coeff * orb->svs[ii+i].vy;
+            vel[2] += coeff * orb->svs[ii+i].vz;
+        }
+    }
+
+    return 0;
+}
+
+// Dispatcher: reads orbitMethod from constant memory d_inpts_int[3]
+__device__ int interpolateOrbit(struct Orbit *orb, double t, double *xyz, double *vel) {
+    if (d_inpts_int[3] == LEGENDRE_METHOD) {
+        return interpolateLegendreOrbit(orb, t, xyz, vel);
+    }
+    return interpolateHermiteOrbit(orb, t, xyz, vel);
 }
 
 // 8 bytes per call
@@ -396,7 +460,7 @@ void runGPUGeo(int iter, int numPix, double *h_inpts_dbl, int *h_inpts_int, doub
     cudaMemcpy(d_lon, h_lon, nb_pixels, cudaMemcpyHostToDevice);
     cudaMemcpy(d_dem, h_dem, nb_pixels, cudaMemcpyHostToDevice);
     cudaMemcpyToSymbol(d_inpts_double, h_inpts_dbl, (9*sizeof(double)));
-    cudaMemcpyToSymbol(d_inpts_int, h_inpts_int, (3*sizeof(int)));
+    cudaMemcpyToSymbol(d_inpts_int, h_inpts_int, (4*sizeof(int)));
 
     freeOrbit(&orb); // Since the data for these is already on the GPU, we need the space again
     freePoly1d(&fdvsrng);

@@ -163,83 +163,21 @@ def _infer_single_band_dtype(path, width, length):
 
 
 def _force_offset_to_valid_mean_if_normalized(self, offsetFilename, offset_name):
-    if not _normalization_applied(self):
-        return
-
-    xml = offsetFilename + '.xml'
-    if (not os.path.exists(offsetFilename)) or (not os.path.exists(xml)):
-        logger.warning(
-            'Normalization-aware %s mean replacement skipped: file missing (%s).',
-            offset_name,
-            offsetFilename,
-        )
-        return
-
-    offimg = isceobj.createImage()
-    offimg.load(xml)
-    width = int(offimg.getWidth())
-    length = int(offimg.getLength())
-    if (width <= 0) or (length <= 0):
-        logger.warning(
-            'Normalization-aware %s mean replacement skipped: invalid image shape (%d, %d).',
-            offset_name,
-            int(length),
-            int(width),
-        )
-        return
-
-    dtype = _infer_single_band_dtype(offsetFilename, width, length)
-    off = np.memmap(offsetFilename, dtype=dtype, mode='r+', shape=(length, width))
-
-    nodata = _safe_float(os.environ.get('ISCE_GEO2RDR_OFFSET_NODATA'), -999999.0)
-    invalid_low = _safe_float(os.environ.get('ISCE_GEO2RDR_OFFSET_INVALID_LOW'), -1.0e5)
-    valid = np.isfinite(off)
-    valid &= (off > invalid_low)
-    if np.isfinite(nodata):
-        valid &= (off != nodata)
-
-    valid_count = int(np.count_nonzero(valid))
-    if valid_count == 0:
-        logger.warning(
-            'Normalization-aware %s mean replacement skipped: no valid pixels '
-            '(nodata=%.1f, invalid_low=%.1f).',
-            offset_name,
-            float(nodata),
-            float(invalid_low),
-        )
-        del off
-        return
-
-    mean_off = float(np.mean(off[valid], dtype=np.float64))
-    off[valid] = mean_off
-    off.flush()
-    del off
-
+    # Hard-disabled to keep geo2rdr outputs untouched.
+    # This blocks any in-place rewrite on both azimuth.off and range.off.
     logger.info(
-        'Normalization-aware %s mean replacement applied: mean=%.6f, valid=%d/%d '
-        '(nodata=%.1f, invalid_low=%.1f).',
+        'Skipping normalization-aware %s post-processing: in-place offset edits are disabled.',
         offset_name,
-        mean_off,
-        valid_count,
-        int(width * length),
-        float(nodata),
-        float(invalid_low),
     )
+    return
 
 
 def _force_azimuth_offset_to_valid_mean_if_normalized(self, azimuthOffsetFilename):
-    # Temporarily disable post-geo2rdr in-place edits on azimuth.off.
-    # Set ISCE_GEO2RDR_ENABLE_AZIMUTH_OFF_MEAN_REPLACEMENT=1 to restore.
-    if not _parse_bool(
-        os.environ.get('ISCE_GEO2RDR_ENABLE_AZIMUTH_OFF_MEAN_REPLACEMENT'),
-        default=False,
-    ):
-        logger.info(
-            'Skipping normalization-aware azimuth.off mean replacement '
-            '(temporarily disabled).'
-        )
-        return
     _force_offset_to_valid_mean_if_normalized(self, azimuthOffsetFilename, 'azimuth.off')
+
+
+def _force_range_offset_to_valid_mean_if_normalized(self, rangeOffsetFilename):
+    _force_offset_to_valid_mean_if_normalized(self, rangeOffsetFilename, 'range.off')
 
 
 def _integrated_external_enabled(self=None):

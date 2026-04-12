@@ -193,11 +193,12 @@ void Geo2rdr::geo2rdr() {
     if (usr_enable_gpu) { // GPU-enabled ; will only be true if GPU_ACC_ENABLED is defined and if the user doesn't disable this flag
         #ifdef GPU_ACC_ENABLED // Doesn't compile the GPU code if scons didnt find CUDA-compatible libraries, etc
         double gpu_inputs_d[9];
-        int gpu_inputs_i[3];
+        int gpu_inputs_i[4];
 
         gpu_inputs_i[0] = demLength;
         gpu_inputs_i[1] = demWidth;
         gpu_inputs_i[2] = int(bistatic);
+        gpu_inputs_i[3] = orbitMethod;
 
         gpu_inputs_d[0] = major;
         gpu_inputs_d[1] = eccentricitySquared;

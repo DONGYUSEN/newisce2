@@ -377,7 +377,7 @@ void Topo::topo() {
 
     if (RUN_GPU_TOPO) {
         double gpu_inputs_d[14];
-        int gpu_inputs_i[7];
+        int gpu_inputs_i[8];
 
         gpu_inputs_d[0] = t0;
         gpu_inputs_d[1] = prf;
@@ -401,6 +401,7 @@ void Topo::topo() {
         gpu_inputs_i[4] = numiter;
         gpu_inputs_i[5] = extraiter;
         gpu_inputs_i[6] = length;
+        gpu_inputs_i[7] = orbit_method;
 
         printf("\n\nCopying Orbit and DEM data to compatible arrays...\n");
 
