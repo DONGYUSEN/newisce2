@@ -43,6 +43,8 @@ set(installfiles
     SAOCOM_SLC.py
     Lutan1.py
     Tianyi.py
+    GF3.py
+    DJ1.py
     ALOS4.py
     Capella.py
     )

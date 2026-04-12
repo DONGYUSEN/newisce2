@@ -2,9 +2,10 @@
 
 import isce
 import isceobj
-from iscesys.StdOEL.StdOELPy import create_writer
 from mroipac.ampcor.Ampcor import Ampcor
-from isceobj.StripmapProc.externalRegistration import estimate_misregistration_polys
+from isceobj.StripmapProc.externalRegistration import (
+    estimate_misregistration_polys,
+)
 from isceobj.Util.Poly2D import Poly2D
 from isceobj.Location.Offset import OffsetField, Offset
 
@@ -144,6 +145,18 @@ def _safe_window_list_env(name, default_values):
         return [int(v) for v in default_values]
     out.sort()
     return out
+
+
+def _normalization_applied(self):
+    sec_prod = ''
+    try:
+        sec_prod = str(getattr(self._insar, 'secondarySlcCropProduct', '') or '')
+    except Exception:
+        sec_prod = ''
+    if not sec_prod:
+        return False
+    token = os.path.basename(sec_prod).strip().lower()
+    return ('_norm.xml' in token) or token.endswith('_norm')
 
 
 def _query_gpu_memory_mb(device_id):
@@ -343,63 +356,64 @@ def _parse_template_search_token(token):
     }
 
 
-def _legacy_template_search_candidates(default_pairs):
-    raw = os.environ.get('ISCE_GPU_AMPCOR_TEMPLATE_SEARCH_CANDIDATES')
-    if raw:
-        candidates = []
-        seen = set()
-        text = str(raw).replace(',', ' ').replace(';', ' ')
-        for token in text.split():
-            one = _parse_template_search_token(token)
-            if one is None:
-                continue
-            key = tuple(one['template_window']) + tuple(one['search_half'])
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(one)
-        if candidates:
-            return candidates
+def _template_search_candidates_from_env(default_pairs, env_names, logger_obj=None):
+    """
+    Parse template/search candidate list from env.
+    Example:
+      "256x256:64x64,512x512:128x128,1024x1024:256x256"
+    """
+    raw = None
+    used_name = None
+    for name in list(env_names or []):
+        value = os.environ.get(str(name), None)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        raw = text
+        used_name = str(name)
+        break
 
-    default_candidates = []
-    default_seen = set()
+    if raw is None:
+        return _legacy_template_search_candidates(default_pairs)
+
+    tokens = str(raw).replace('\n', ',').replace(';', ',').split(',')
+    parsed_pairs = []
+    for token in tokens:
+        one = _parse_template_search_token(token)
+        if one is None:
+            continue
+        parsed_pairs.append((tuple(one['template_window']), tuple(one['search_half'])))
+
+    if not parsed_pairs:
+        if logger_obj is not None:
+            logger_obj.warning(
+                'Invalid %s="%s". Falling back to default template/search candidates.',
+                str(used_name),
+                str(raw),
+            )
+        return _legacy_template_search_candidates(default_pairs)
+
+    if logger_obj is not None:
+        logger_obj.info(
+            'Using template/search candidate list from %s: %s',
+            str(used_name),
+            ', '.join(
+                '{0}:{1}'.format(_shape_label(p[0]), _shape_label(p[1]))
+                for p in parsed_pairs
+            ),
+        )
+    return _legacy_template_search_candidates(parsed_pairs)
+
+
+def _legacy_template_search_candidates(default_pairs):
+    candidates = []
+    seen = set()
     for template_window, search_half in list(default_pairs):
         one = {
             'template_window': _coerce_hw_pair(template_window, minimum=1),
             'search_half': _coerce_hw_pair(search_half, minimum=1),
-        }
-        key = tuple(one['template_window']) + tuple(one['search_half'])
-        if key in default_seen:
-            continue
-        default_seen.add(key)
-        default_candidates.append(one)
-
-    has_window_override = os.environ.get('ISCE_GPU_AMPCOR_WINDOW_CANDIDATES') is not None
-    windows = _safe_window_list_env(
-        'ISCE_GPU_AMPCOR_WINDOW_CANDIDATES',
-        [pair[0][0] for pair in default_pairs],
-    )
-    has_fixed_search = os.environ.get('ISCE_GPU_AMPCOR_SEARCH_HALF') is not None
-    has_search_ratio_override = os.environ.get('ISCE_GPU_AMPCOR_SEARCH_TO_WINDOW_RATIO') is not None
-    if not (has_window_override or has_fixed_search or has_search_ratio_override):
-        return default_candidates
-
-    search_ratio = max(0.05, _safe_float_env('ISCE_GPU_AMPCOR_SEARCH_TO_WINDOW_RATIO', 0.5))
-    candidates = []
-    seen = set()
-    for win in windows:
-        default_search = max(4, int(np.rint(float(win) * search_ratio)))
-        if has_fixed_search:
-            search_half = _safe_hw_pair_env(
-                'ISCE_GPU_AMPCOR_SEARCH_HALF',
-                (default_search, default_search),
-                minimum=4,
-            )
-        else:
-            search_half = (default_search, default_search)
-        one = {
-            'template_window': (int(win), int(win)),
-            'search_half': tuple(search_half),
         }
         key = tuple(one['template_window']) + tuple(one['search_half'])
         if key in seen:
@@ -417,6 +431,111 @@ def _cleanup_gpu_ampcor_outputs(out_prefix):
                 os.remove(path)
         except Exception:
             pass
+
+
+def _slc_dtype(dtype_name):
+    if not dtype_name:
+        return np.complex64
+    key = str(dtype_name).strip().upper()
+    mapping = {
+        'CFLOAT': np.complex64,
+        'CFLOAT32': np.complex64,
+        'CDOUBLE': np.complex128,
+        'CFLOAT64': np.complex128,
+    }
+    return mapping.get(key, np.complex64)
+
+
+def _normalize_slc_path(path):
+    if str(path).endswith('.xml'):
+        return str(path)[:-4]
+    return str(path)
+
+
+def _read_slc_as_memmap(path):
+    slc_path = _normalize_slc_path(path)
+    xml_path = slc_path + '.xml'
+    if not os.path.exists(slc_path):
+        raise RuntimeError('SLC file does not exist: {0}'.format(slc_path))
+    if not os.path.exists(xml_path):
+        raise RuntimeError('SLC XML does not exist: {0}'.format(xml_path))
+
+    img = isceobj.createSlcImage()
+    img.load(xml_path)
+    width = int(img.getWidth())
+    length = int(img.getLength())
+    dtype = _slc_dtype(getattr(img, 'dataType', None))
+    data = np.memmap(slc_path, dtype=dtype, mode='r', shape=(length, width))
+    if np.iscomplexobj(data):
+        return data
+    return np.asarray(data, dtype=np.float32).astype(np.complex64)
+
+
+def _extract_amp_patch(arr, center_row, center_col, window):
+    win = int(max(8, int(window)))
+    if win % 2 != 0:
+        win += 1
+    half = int(win // 2)
+
+    rr = int(np.rint(float(center_row)))
+    cc = int(np.rint(float(center_col)))
+    r0 = rr - half
+    c0 = cc - half
+    r1 = r0 + win
+    c1 = c0 + win
+    if (r0 < 0) or (c0 < 0) or (r1 > arr.shape[0]) or (c1 > arr.shape[1]):
+        return None
+
+    patch = arr[r0:r1, c0:c1]
+    return np.abs(patch).astype(np.float64, copy=False)
+
+
+def _gmtsar_corr_score(master_amp, slave_amp):
+    ma = np.asarray(master_amp, dtype=np.float64)
+    sa = np.asarray(slave_amp, dtype=np.float64)
+    ma = ma - float(np.mean(ma))
+    sa = sa - float(np.mean(sa))
+    denom = float(np.sqrt(np.sum(ma * ma) * np.sum(sa * sa)))
+    if denom <= 1.0e-12:
+        return 0.0
+    return float(100.0 * np.abs(np.sum(ma * sa)) / denom)
+
+
+def _compute_gmtsar_quality_field(field, reference, secondary):
+    offsets = list(getattr(field, '_offsets', []) or [])
+    if len(offsets) <= 0:
+        return {'updated': 0, 'valid': 0, 'median': 0.0, 'window': None}
+
+    win = max(16, _safe_positive_int_env('ISCE_AMPCOR_GMTSAR_SNR_WINDOW', 64))
+    if win % 2 != 0:
+        win += 1
+
+    ref = _read_slc_as_memmap(reference)
+    sec = _read_slc_as_memmap(secondary)
+
+    values = []
+    updated = 0
+    for one in offsets:
+        x, y = one.getCoordinate()
+        dx, dy = one.getOffset()
+
+        pm = _extract_amp_patch(ref, y, x, win)
+        ps = _extract_amp_patch(sec, y + float(dy), x + float(dx), win)
+        if (pm is None) or (ps is None):
+            one.setSignalToNoise(0.0)
+            continue
+
+        snr_like = _gmtsar_corr_score(pm, ps)
+        if (not np.isfinite(snr_like)) or (snr_like < 0.0):
+            snr_like = 0.0
+        if snr_like > 100.0:
+            snr_like = 100.0
+        one.setSignalToNoise(float(snr_like))
+        values.append(float(snr_like))
+        updated += 1
+
+    median = float(np.median(values)) if values else 0.0
+    return {'updated': int(updated), 'valid': int(len(values)), 'median': median, 'window': int(win)}
 
 
 def _offset_field_arrays(field):
@@ -444,6 +563,100 @@ def _offset_field_arrays(field):
         'rg': np.array(rg, dtype=np.float64),
         'az': np.array(az, dtype=np.float64),
         'snr': np.array(snr, dtype=np.float64),
+    }
+
+
+def _offset_bounds(values, method, iqr_coeff=1.5, z_threshold=3.0, modified_z_threshold=3.29):
+    arr = np.asarray(values, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size <= 0:
+        return np.nan, np.nan
+
+    m = str(method or 'modified_zscore').strip().lower()
+    if m == 'iqr':
+        q1 = float(np.percentile(arr, 25.0))
+        q3 = float(np.percentile(arr, 75.0))
+        iqr = float(q3 - q1)
+        if (not np.isfinite(iqr)) or (abs(iqr) <= 1.0e-12):
+            return float(q1), float(q3)
+        return float(q1 - float(iqr_coeff) * iqr), float(q3 + float(iqr_coeff) * iqr)
+
+    if m == 'zscore':
+        mean = float(np.mean(arr))
+        std = float(np.std(arr))
+        if (not np.isfinite(std)) or (std <= 1.0e-12):
+            return float(mean), float(mean)
+        return float(mean - float(z_threshold) * std), float(mean + float(z_threshold) * std)
+
+    med = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - med)))
+    if (not np.isfinite(mad)) or (mad <= 1.0e-12):
+        return float(med), float(med)
+    delta = float(modified_z_threshold) * float(mad) / 0.6745
+    return float(med - delta), float(med + delta)
+
+
+def _gmtsar_style_filter_arrays(across, down, rg, az, snr, method='modified_zscore'):
+    if rg.size <= 0:
+        return np.zeros(0, dtype=bool), {
+            'method': str(method),
+            'input_points': 0,
+            'kept_points': 0,
+            'dx_bounds': [None, None],
+            'dy_bounds': [None, None],
+        }
+
+    finite = (
+        np.isfinite(across)
+        & np.isfinite(down)
+        & np.isfinite(rg)
+        & np.isfinite(az)
+        & np.isfinite(snr)
+    )
+    if not np.any(finite):
+        return np.zeros(rg.size, dtype=bool), {
+            'method': str(method),
+            'input_points': int(rg.size),
+            'kept_points': 0,
+            'dx_bounds': [None, None],
+            'dy_bounds': [None, None],
+        }
+
+    rg_f = rg[finite]
+    az_f = az[finite]
+    dx_l, dx_u = _offset_bounds(
+        rg_f,
+        method=method,
+        iqr_coeff=_safe_float_env('ISCE_FALLBACK_OFFSET_FILTER_IQR_COEFF', 1.5),
+        z_threshold=_safe_float_env('ISCE_FALLBACK_OFFSET_FILTER_Z_THRESHOLD', 3.0),
+        modified_z_threshold=_safe_float_env('ISCE_FALLBACK_OFFSET_FILTER_MODIFIED_Z_THRESHOLD', 3.29),
+    )
+    dy_l, dy_u = _offset_bounds(
+        az_f,
+        method=method,
+        iqr_coeff=_safe_float_env('ISCE_FALLBACK_OFFSET_FILTER_IQR_COEFF', 1.5),
+        z_threshold=_safe_float_env('ISCE_FALLBACK_OFFSET_FILTER_Z_THRESHOLD', 3.0),
+        modified_z_threshold=_safe_float_env('ISCE_FALLBACK_OFFSET_FILTER_MODIFIED_Z_THRESHOLD', 3.29),
+    )
+    keep_f = (
+        np.isfinite(rg_f)
+        & np.isfinite(az_f)
+        & (rg_f >= float(dx_l))
+        & (rg_f <= float(dx_u))
+        & (az_f >= float(dy_l))
+        & (az_f <= float(dy_u))
+    )
+
+    keep = np.zeros(rg.size, dtype=bool)
+    finite_idx = np.flatnonzero(finite)
+    keep[finite_idx[keep_f]] = True
+    return keep, {
+        'method': str(method),
+        'input_points': int(rg.size),
+        'finite_points': int(np.count_nonzero(finite)),
+        'kept_points': int(np.count_nonzero(keep)),
+        'dx_bounds': [float(dx_l), float(dx_u)],
+        'dy_bounds': [float(dy_l), float(dy_u)],
     }
 
 
@@ -484,13 +697,13 @@ def _evaluate_probe_field(field, snr_threshold):
             'quality': 0.0,
         }
 
-    valid = (
+    valid_snr = (
         np.isfinite(arrays['snr'])
         & np.isfinite(arrays['az'])
         & np.isfinite(arrays['rg'])
         & (arrays['snr'] >= float(snr_threshold))
     )
-    valid_count = int(np.sum(valid))
+    valid_count = int(np.sum(valid_snr))
     total = int(arrays['snr'].size)
     valid_ratio = float(valid_count) / float(max(1, total))
     if valid_count <= 0:
@@ -510,11 +723,28 @@ def _evaluate_probe_field(field, snr_threshold):
             'quality': 0.0,
         }
 
-    az_valid = arrays['az'][valid]
-    rg_valid = arrays['rg'][valid]
-    snr_valid = arrays['snr'][valid]
-    across_valid = arrays['across'][valid]
-    down_valid = arrays['down'][valid]
+    filter_method = os.environ.get('ISCE_FALLBACK_OFFSET_FILTER_METHOD', 'modified_zscore')
+    keep_after_filter, filt_summary = _gmtsar_style_filter_arrays(
+        arrays['across'][valid_snr],
+        arrays['down'][valid_snr],
+        arrays['rg'][valid_snr],
+        arrays['az'][valid_snr],
+        arrays['snr'][valid_snr],
+        method=filter_method,
+    )
+
+    if int(np.count_nonzero(keep_after_filter)) > 0:
+        across_valid = arrays['across'][valid_snr][keep_after_filter]
+        down_valid = arrays['down'][valid_snr][keep_after_filter]
+        rg_valid = arrays['rg'][valid_snr][keep_after_filter]
+        az_valid = arrays['az'][valid_snr][keep_after_filter]
+        snr_valid = arrays['snr'][valid_snr][keep_after_filter]
+    else:
+        across_valid = arrays['across'][valid_snr]
+        down_valid = arrays['down'][valid_snr]
+        rg_valid = arrays['rg'][valid_snr]
+        az_valid = arrays['az'][valid_snr]
+        snr_valid = arrays['snr'][valid_snr]
 
     az_fit_rms = _linear_fit_rms(across_valid, down_valid, az_valid)
     rg_fit_rms = _linear_fit_rms(across_valid, down_valid, rg_valid)
@@ -524,11 +754,15 @@ def _evaluate_probe_field(field, snr_threshold):
     spread = float(np.sqrt((az_std ** 2) + (rg_std ** 2)))
     mean_snr = float(np.mean(snr_valid))
     peak_snr = float(np.max(snr_valid))
-    quality = float(valid_ratio * peak_snr / (1.0 + fit_rms))
+    kept_count = int(snr_valid.size)
+    kept_ratio = float(kept_count) / float(max(1, total))
+    quality = float((max(float(kept_count), 1.0) * max(mean_snr, 1.0)) / ((1.0 + fit_rms) ** 2.0))
 
     return {
-        'valid_count': valid_count,
-        'valid_ratio': valid_ratio,
+        'valid_count': kept_count,
+        'valid_ratio': kept_ratio,
+        'raw_valid_count': int(valid_count),
+        'raw_valid_ratio': float(valid_ratio),
         'mean_snr': mean_snr,
         'peak_snr': peak_snr,
         'az_std': az_std,
@@ -540,15 +774,13 @@ def _evaluate_probe_field(field, snr_threshold):
         'az_median': float(np.median(az_valid)),
         'rg_median': float(np.median(rg_valid)),
         'quality': quality,
+        'filter_summary': filt_summary,
     }
 
 
 def _refined_probe_search_half(search_half):
     shh, sw = _coerce_hw_pair(search_half, minimum=1)
-    return (
-        max(8, int(np.rint(float(shh) * 0.5))),
-        max(8, int(np.rint(float(sw) * 0.5))),
-    )
+    return int(shh), int(sw)
 
 
 def _run_gpu_ampcor_probe_candidate(
@@ -557,12 +789,14 @@ def _run_gpu_ampcor_probe_candidate(
     misreg_dir,
     candidate,
     snr_threshold,
+    initial_azoffset=0,
+    initial_rgoffset=0,
 ):
     template_window = _coerce_hw_pair(candidate['template_window'], minimum=1)
     coarse_search_half = _coerce_hw_pair(candidate['search_half'], minimum=1)
     refine_search_half = _refined_probe_search_half(coarse_search_half)
-    coarse_grid = max(3, _safe_positive_int_env('ISCE_GPU_AMPCOR_PROBE_GRID', 3))
-    refine_grid = max(coarse_grid, _safe_positive_int_env('ISCE_GPU_AMPCOR_PROBE_REFINE_GRID', 5))
+    coarse_grid = 4
+    refine_grid = 4
     time_weight = max(0.0, _safe_float_env('ISCE_GPU_AMPCOR_PROBE_TIME_WEIGHT', 0.35))
 
     coarse_prefix = os.path.join(
@@ -587,6 +821,8 @@ def _run_gpu_ampcor_probe_candidate(
         reference,
         secondary,
         coarse_prefix,
+        azoffset=int(np.rint(float(initial_azoffset))),
+        rgoffset=int(np.rint(float(initial_rgoffset))),
         template_window=template_window,
         search_half=coarse_search_half,
         num_locations_across=coarse_grid,
@@ -648,52 +884,71 @@ def _select_gpu_ampcor_template_search(
     secondary,
     misreg_dir,
     snr_threshold,
+    forced_template_window=None,
+    forced_search_half=None,
+    initial_azoffset=0,
+    initial_rgoffset=0,
 ):
-    auto_enabled = _parse_bool_env('ISCE_GPU_AMPCOR_AUTO_TEMPLATE_SEARCH', True)
-    fixed_template = _safe_hw_pair_env(
-        'ISCE_GPU_AMPCOR_TEMPLATE_WINDOW',
-        (128, 128),
-        minimum=16,
-    )
-    fixed_search = _safe_hw_pair_env(
-        'ISCE_GPU_AMPCOR_SEARCH_HALF_RANGE',
-        (32, 32),
-        minimum=4,
-    )
-    if not auto_enabled:
-        fixed = _run_gpu_ampcor_probe_candidate(
-            reference,
-            secondary,
-            misreg_dir,
-            {
-                'template_window': tuple(fixed_template),
-                'search_half': tuple(fixed_search),
-            },
-            snr_threshold=snr_threshold,
-        )
+    forced_template = None
+    forced_search = None
+    if forced_template_window is not None:
+        forced_template = _coerce_hw_pair(forced_template_window, minimum=16)
         logger.info(
-            'GPU Ampcor joint auto-selection disabled; using fixed template=%s '
-            'coarse_search_half=%s refine_search_half=%s gross=(az=%.3f, rg=%.3f).',
-            _shape_label(fixed['template_window']),
-            _shape_label(fixed['coarse_search_half']),
-            _shape_label(fixed['refine_search_half']),
-            float(fixed.get('gross_azimuth_offset', 0.0)),
-            float(fixed.get('gross_range_offset', 0.0)),
+            'GPU Ampcor template forced by external window selection: %s',
+            _shape_label(forced_template),
         )
-        return fixed, [dict(fixed, success=True, error=None)]
+    if forced_search_half is not None:
+        forced_search = _coerce_hw_pair(forced_search_half, minimum=4)
+        logger.info(
+            'GPU Ampcor search-half forced by external window selection: %s',
+            _shape_label(forced_search),
+        )
 
     default_pairs = [
-        ((128, 128), (64, 64)),
-        ((256, 256), (128, 128)),
-        ((512, 512), (256, 256)),
-        ((1024, 1024), (512, 512)),
-        ((1024, 1024), (1024, 1024)),
+        ((256, 256), (64, 64)),
+        ((512, 512), (128, 128)),
+        ((1024, 1024), (256, 256)),
     ]
-    candidates = _legacy_template_search_candidates(default_pairs)
+    base_candidates = _template_search_candidates_from_env(
+        default_pairs=default_pairs,
+        env_names=(
+            'ISCE_GPU_AMPCOR_TEMPLATE_SEARCH_LIST',
+            'ISCE_AMPCOR_TEMPLATE_SEARCH_LIST',
+        ),
+        logger_obj=logger,
+    )
+    base_pairs = [
+        (tuple(c['template_window']), tuple(c['search_half']))
+        for c in list(base_candidates)
+    ]
+    if not base_pairs:
+        base_pairs = list(default_pairs)
+    if (forced_template is not None) and (forced_search is not None):
+        forced_pairs = [(tuple(forced_template), tuple(forced_search))]
+        candidates = _legacy_template_search_candidates(forced_pairs)
+    elif forced_template is not None:
+        forced_pairs = []
+        seen_search = set()
+        for _tpl, search in list(base_pairs):
+            key = tuple(_coerce_hw_pair(search, minimum=4))
+            if key in seen_search:
+                continue
+            seen_search.add(key)
+            forced_pairs.append((tuple(forced_template), key))
+        half_search = (
+            max(4, int(forced_template[0] // 2)),
+            max(4, int(forced_template[1] // 2)),
+        )
+        if half_search not in seen_search:
+            forced_pairs.append((tuple(forced_template), half_search))
+        candidates = _legacy_template_search_candidates(forced_pairs)
+    else:
+        candidates = _legacy_template_search_candidates(base_pairs)
     min_valid_ratio = max(
         0.0,
         min(1.0, _safe_float_env('ISCE_GPU_AMPCOR_PROBE_MIN_VALID_RATIO', 0.55)),
     )
+    max_fit_rms = max(0.0, _safe_float_env('ISCE_GPU_AMPCOR_PROBE_MAX_FIT_RMS', 12.0))
     tie_margin = max(0.0, _safe_float_env('ISCE_GPU_AMPCOR_PROBE_SCORE_MARGIN', 0.08))
 
     metrics = []
@@ -711,6 +966,8 @@ def _select_gpu_ampcor_template_search(
                 misreg_dir,
                 candidate,
                 snr_threshold=snr_threshold,
+                initial_azoffset=initial_azoffset,
+                initial_rgoffset=initial_rgoffset,
             )
             one.update(probe)
             one['success'] = True
@@ -745,7 +1002,13 @@ def _select_gpu_ampcor_template_search(
         )
 
     eligible = [row for row in successful if float(row['valid_ratio']) >= float(min_valid_ratio)]
-    pool = eligible if eligible else successful
+    fit_ok = [row for row in eligible if float(row.get('fit_rms', np.inf)) <= float(max_fit_rms)]
+    if fit_ok:
+        pool = fit_ok
+    elif eligible:
+        pool = eligible
+    else:
+        pool = successful
     best_score = max(float(row['score']) for row in pool)
     near_best = [
         row for row in pool
@@ -778,22 +1041,28 @@ def _run_cpu_ampcor_probe_candidate(
     secondary,
     candidate,
     snr_threshold,
+    initial_azoffset=0,
+    initial_rgoffset=0,
+    engine='legacy',
 ):
     template_window = _coerce_hw_pair(candidate['template_window'], minimum=1)
     coarse_search_half = _coerce_hw_pair(candidate['search_half'], minimum=1)
     refine_search_half = _refined_probe_search_half(coarse_search_half)
-    coarse_grid = max(3, _safe_positive_int_env('ISCE_CPU_AMPCOR_PROBE_GRID', 3))
-    refine_grid = max(coarse_grid, _safe_positive_int_env('ISCE_CPU_AMPCOR_PROBE_REFINE_GRID', 5))
+    coarse_grid = 4
+    refine_grid = 4
     time_weight = max(0.0, _safe_float_env('ISCE_CPU_AMPCOR_PROBE_TIME_WEIGHT', 0.35))
 
     coarse_tic = time.perf_counter()
     coarse_field = estimateOffsetField(
         reference,
         secondary,
+        azoffset=int(np.rint(float(initial_azoffset))),
+        rgoffset=int(np.rint(float(initial_rgoffset))),
         template_window=template_window,
         search_half=coarse_search_half,
         num_locations_across=coarse_grid,
         num_locations_down=coarse_grid,
+        engine=engine,
     )
     coarse_elapsed = float(time.perf_counter() - coarse_tic)
     coarse_metrics = _evaluate_probe_field(coarse_field, snr_threshold=float(snr_threshold))
@@ -810,6 +1079,7 @@ def _run_cpu_ampcor_probe_candidate(
         search_half=refine_search_half,
         num_locations_across=refine_grid,
         num_locations_down=refine_grid,
+        engine=engine,
     )
     refine_elapsed = float(time.perf_counter() - refine_tic)
     refine_metrics = _evaluate_probe_field(refine_field, snr_threshold=float(snr_threshold))
@@ -843,51 +1113,72 @@ def _select_cpu_ampcor_template_search(
     reference,
     secondary,
     snr_threshold,
+    forced_template_window=None,
+    forced_search_half=None,
+    initial_azoffset=0,
+    initial_rgoffset=0,
+    engine='legacy',
 ):
-    auto_enabled = _parse_bool_env('ISCE_CPU_AMPCOR_AUTO_TEMPLATE_SEARCH', True)
-    fixed_template = _safe_hw_pair_env(
-        'ISCE_CPU_AMPCOR_TEMPLATE_WINDOW',
-        (128, 128),
-        minimum=16,
-    )
-    fixed_search = _safe_hw_pair_env(
-        'ISCE_CPU_AMPCOR_SEARCH_HALF_RANGE',
-        (32, 32),
-        minimum=4,
-    )
-    if not auto_enabled:
-        fixed = _run_cpu_ampcor_probe_candidate(
-            reference,
-            secondary,
-            {
-                'template_window': tuple(fixed_template),
-                'search_half': tuple(fixed_search),
-            },
-            snr_threshold=snr_threshold,
-        )
+    forced_template = None
+    forced_search = None
+    if forced_template_window is not None:
+        forced_template = _coerce_hw_pair(forced_template_window, minimum=16)
         logger.info(
-            'CPU Ampcor joint auto-selection disabled; using fixed template=%s '
-            'coarse_search_half=%s refine_search_half=%s gross=(az=%.3f, rg=%.3f).',
-            _shape_label(fixed['template_window']),
-            _shape_label(fixed['coarse_search_half']),
-            _shape_label(fixed['refine_search_half']),
-            float(fixed.get('gross_azimuth_offset', 0.0)),
-            float(fixed.get('gross_range_offset', 0.0)),
+            'CPU Ampcor template forced by external window selection: %s',
+            _shape_label(forced_template),
         )
-        return fixed, [dict(fixed, success=True, error=None)]
+    if forced_search_half is not None:
+        forced_search = _coerce_hw_pair(forced_search_half, minimum=4)
+        logger.info(
+            'CPU Ampcor search-half forced by external window selection: %s',
+            _shape_label(forced_search),
+        )
 
     default_pairs = [
-        ((128, 128), (64, 64)),
-        ((256, 256), (128, 128)),
-        ((512, 512), (256, 256)),
-        ((1024, 1024), (512, 512)),
-        ((1024, 1024), (1024, 1024)),
+        ((256, 256), (64, 64)),
+        ((512, 512), (128, 128)),
+        ((1024, 1024), (256, 256)),
     ]
-    candidates = _legacy_template_search_candidates(default_pairs)
+    base_candidates = _template_search_candidates_from_env(
+        default_pairs=default_pairs,
+        env_names=(
+            'ISCE_CPU_AMPCOR_TEMPLATE_SEARCH_LIST',
+            'ISCE_AMPCOR_TEMPLATE_SEARCH_LIST',
+        ),
+        logger_obj=logger,
+    )
+    base_pairs = [
+        (tuple(c['template_window']), tuple(c['search_half']))
+        for c in list(base_candidates)
+    ]
+    if not base_pairs:
+        base_pairs = list(default_pairs)
+    if (forced_template is not None) and (forced_search is not None):
+        forced_pairs = [(tuple(forced_template), tuple(forced_search))]
+        candidates = _legacy_template_search_candidates(forced_pairs)
+    elif forced_template is not None:
+        forced_pairs = []
+        seen_search = set()
+        for _tpl, search in list(base_pairs):
+            key = tuple(_coerce_hw_pair(search, minimum=4))
+            if key in seen_search:
+                continue
+            seen_search.add(key)
+            forced_pairs.append((tuple(forced_template), key))
+        half_search = (
+            max(4, int(forced_template[0] // 2)),
+            max(4, int(forced_template[1] // 2)),
+        )
+        if half_search not in seen_search:
+            forced_pairs.append((tuple(forced_template), half_search))
+        candidates = _legacy_template_search_candidates(forced_pairs)
+    else:
+        candidates = _legacy_template_search_candidates(base_pairs)
     min_valid_ratio = max(
         0.0,
         min(1.0, _safe_float_env('ISCE_CPU_AMPCOR_PROBE_MIN_VALID_RATIO', 0.55)),
     )
+    max_fit_rms = max(0.0, _safe_float_env('ISCE_CPU_AMPCOR_PROBE_MAX_FIT_RMS', 12.0))
     tie_margin = max(0.0, _safe_float_env('ISCE_CPU_AMPCOR_PROBE_SCORE_MARGIN', 0.08))
 
     metrics = []
@@ -904,6 +1195,9 @@ def _select_cpu_ampcor_template_search(
                 secondary,
                 candidate,
                 snr_threshold=snr_threshold,
+                initial_azoffset=initial_azoffset,
+                initial_rgoffset=initial_rgoffset,
+                engine=engine,
             )
             one.update(probe)
             one['success'] = True
@@ -938,7 +1232,13 @@ def _select_cpu_ampcor_template_search(
         )
 
     eligible = [row for row in successful if float(row['valid_ratio']) >= float(min_valid_ratio)]
-    pool = eligible if eligible else successful
+    fit_ok = [row for row in eligible if float(row.get('fit_rms', np.inf)) <= float(max_fit_rms)]
+    if fit_ok:
+        pool = fit_ok
+    elif eligible:
+        pool = eligible
+    else:
+        pool = successful
     best_score = max(float(row['score']) for row in pool)
     near_best = [
         row for row in pool
@@ -1038,8 +1338,16 @@ def _run_gpu_ampcor_with_retry(reference, secondary, out_prefix, **kwargs):
     raise RuntimeError('GPU Ampcor failed after retries: {0}'.format(attempts))
 
 
-def _integrated_external_enabled():
-    return _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_ENABLED', True)
+def _integrated_external_enabled(self=None):
+    env_value = os.environ.get('ISCE_EXTERNAL_REGISTRATION_ENABLED')
+    if env_value is not None:
+        return _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_ENABLED', True)
+    if self is not None and hasattr(self, 'useExternalCoregistration'):
+        try:
+            return bool(getattr(self, 'useExternalCoregistration'))
+        except Exception:
+            pass
+    return True
 
 
 def _prefer_gpu_ampcor():
@@ -1048,6 +1356,25 @@ def _prefer_gpu_ampcor():
 
 def _allow_cpu_ampcor_fallback():
     return _parse_bool_env('ISCE_ALLOW_CPU_AMPCOR_FALLBACK', True)
+
+
+def _cpu_ampcor_engine():
+    raw = os.environ.get('ISCE_CPU_AMPCOR_ENGINE', 'legacy')
+    token = str(raw).strip().lower()
+    aliases = {
+        'legacy': 'legacy',
+        'isce2': 'legacy',
+        'cpu': 'isce3_cpu',
+        'isce3': 'isce3_cpu',
+        'isce3_cpu': 'isce3_cpu',
+    }
+    if token in aliases:
+        return aliases[token]
+    logger.warning(
+        'Unsupported ISCE_CPU_AMPCOR_ENGINE=%s, fallback to legacy.',
+        str(raw),
+    )
+    return 'legacy'
 
 
 def _gpu_ampcor_available(self):
@@ -1097,9 +1424,25 @@ def _integrated_external_config():
         if os.environ.get('ISCE_EXTERNAL_REGISTRATION_FINE_SAMPLING_STRIDE') is not None
         else 'ISCE_EXTERNAL_REGISTRATION_FINE_SPACING'
     )
-    max_points_cap = _safe_int_env('ISCE_EXTERNAL_REGISTRATION_MAX_POINTS_CAP', 120 * 120)
+    fine_max_az_points = _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_MAX_AZ_POINTS', 60)
+    if fine_max_az_points <= 0:
+        fine_max_az_points = 60
+    fine_max_rg_points = _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_MAX_RG_POINTS', 30)
+    if fine_max_rg_points <= 0:
+        fine_max_rg_points = 30
+    fine_dir_cap = int(max(1, fine_max_az_points) * max(1, fine_max_rg_points))
+    fine_max_total_points = _safe_int_env(
+        'ISCE_EXTERNAL_REGISTRATION_FINE_MAX_TOTAL_POINTS',
+        fine_dir_cap,
+    )
+    if fine_max_total_points <= 0:
+        fine_max_total_points = fine_dir_cap
+    fine_max_total_points = min(int(fine_max_total_points), int(fine_dir_cap))
+
+    max_points_cap = _safe_int_env('ISCE_EXTERNAL_REGISTRATION_MAX_POINTS_CAP', fine_max_total_points)
     if max_points_cap <= 0:
-        max_points_cap = 120 * 120
+        max_points_cap = fine_max_total_points
+    max_points_cap = min(int(max_points_cap), int(fine_max_total_points))
     max_points_cfg = _safe_int_env('ISCE_EXTERNAL_REGISTRATION_MAX_POINTS', max_points_cap)
     if max_points_cfg <= 0:
         max_points_cfg = max_points_cap
@@ -1107,10 +1450,17 @@ def _integrated_external_config():
 
     cfg = {
         'staged_enable': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_STAGED_ENABLE', True),
-        'stage1_disable': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_DISABLE', True),
+        'stage1_disable': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_DISABLE', False),
+        'adaptive_window_policy': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_ADAPTIVE_WINDOW_POLICY', False),
+        'resolution_m': None,
+        'secondary_prf_hz': None,
         'stage1_source': os.environ.get('ISCE_EXTERNAL_REGISTRATION_STAGE1_SOURCE', 'geo2rdr_mean'),
         'stage1_require_geo2rdr': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_REQUIRE_GEO2RDR', True),
         'stage1_geo2rdr_nodata': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_GEO2RDR_NODATA', -999999.0),
+        'stage1_geo2rdr_invalid_low': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE1_GEO2RDR_INVALID_LOW',
+            _safe_float_env('ISCE_GEO2RDR_OFFSET_INVALID_LOW', -1.0e5),
+        ),
         'use_geo2rdr_valid_mask': _parse_bool_env(
             'ISCE_EXTERNAL_REGISTRATION_GEO2RDR_VALID_MASK_ENABLE',
             True,
@@ -1122,26 +1472,58 @@ def _integrated_external_config():
         'stage1_window': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_WINDOW', 2048),
         'stage1_search_half': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_SEARCH_HALF', 1024),
         'stage1_grid_size': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_GRID_SIZE', 4),
-        'stage1_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_QUALITY', 0.05),
+        'stage1_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_QUALITY', 18.0),
         'stage1_min_valid': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_MIN_VALID', 4),
         'stage1_outlier_sigma': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE1_OUTLIER_SIGMA', 2.5),
         'stage1_outlier_max_iterations': _safe_int_env(
             'ISCE_EXTERNAL_REGISTRATION_STAGE1_OUTLIER_MAX_ITERATIONS',
             8,
         ),
-        'stage2_windows': _safe_int_list_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_WINDOWS', [256, 512, 1024]),
+        'stage2_windows': _safe_int_list_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_WINDOWS', [1024, 512, 256, 128]),
         'stage2_search_half_scale': _safe_float_env(
             'ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_SCALE',
             0.5,
         ),
-        'stage2_search_half_min': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_MIN', 16),
-        'stage2_search_half_max': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_MAX', 1024),
+        'stage2_search_half_scales': _safe_float_list_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_SCALES',
+            [],
+        ),
+        'stage2_search_half_min': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_MIN', 1),
+        'stage2_search_half_max': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_HALF_MAX', 16384),
         'stage2_grid_size': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_GRID_SIZE', 4),
-        'stage2_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_QUALITY', 0.05),
+        'stage2_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_QUALITY', 18.0),
         'stage2_min_valid': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_STAGE2_MIN_VALID', 4),
         'stage2_prefer_larger_window': _parse_bool_env(
             'ISCE_EXTERNAL_REGISTRATION_STAGE2_PREFER_LARGER_WINDOW',
             True,
+        ),
+        'stage2_prefer_smaller_when_close': _parse_bool_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_PREFER_SMALLER_WHEN_CLOSE',
+            True,
+        ),
+        'stage2_valid_margin_for_smaller_window': _safe_int_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_VALID_MARGIN',
+            1,
+        ),
+        'stage2_spread_margin_for_smaller_window': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_SPREAD_MARGIN',
+            2.0,
+        ),
+        'stage2_prefer_smaller_search_when_close': _parse_bool_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_PREFER_SMALLER_SEARCH_WHEN_CLOSE',
+            True,
+        ),
+        'stage2_valid_margin_for_smaller_search': _safe_int_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_VALID_MARGIN',
+            1,
+        ),
+        'stage2_spread_margin_for_smaller_search': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_SPREAD_MARGIN',
+            1.0,
+        ),
+        'stage2_quality_margin_for_smaller_search': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_STAGE2_SEARCH_QUALITY_MARGIN',
+            1.0,
         ),
         'coarse_window': _safe_int_env(coarse_template_env, 256),
         'coarse_multiscale': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_COARSE_MULTISCALE', True),
@@ -1161,7 +1543,7 @@ def _integrated_external_config():
         ),
         'coarse_correlation_threshold': _safe_float_env(
             'ISCE_EXTERNAL_REGISTRATION_COARSE_CORRELATION_THRESHOLD',
-            0.06,
+            18.0,
         ),
         'coarse_min_window': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_COARSE_MIN_WINDOW', 96),
         'coarse_max_window': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_COARSE_MAX_WINDOW', 4096),
@@ -1171,14 +1553,14 @@ def _integrated_external_config():
             True,
         ),
         'coarse_log_candidates': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_COARSE_LOG', True),
-        'coarse_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_COARSE_QUALITY', 0.06),
+        'coarse_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_COARSE_QUALITY', 18.0),
         'coarse_auto_efficiency_balance': _parse_bool_env(
             'ISCE_EXTERNAL_REGISTRATION_COARSE_AUTO_EFFICIENCY_BALANCE',
             True,
         ),
         'coarse_quality_margin_for_smaller_window': _safe_float_env(
             'ISCE_EXTERNAL_REGISTRATION_COARSE_QUALITY_MARGIN',
-            0.03,
+            3.0,
         ),
         'coarse_spread_margin_for_smaller_window': _safe_float_env(
             'ISCE_EXTERNAL_REGISTRATION_COARSE_SPREAD_MARGIN',
@@ -1205,9 +1587,19 @@ def _integrated_external_config():
         'fine_search_min': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_SEARCH_MIN', 16),
         'fine_search_max': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_SEARCH_MAX', 128),
         'fine_spacing': _safe_int_env(fine_stride_env, 128),
-        'fine_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_FINE_QUALITY', 0.05),
+        'fine_quality_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_FINE_QUALITY', 18.0),
+        'offset_filter_method': os.environ.get('ISCE_EXTERNAL_REGISTRATION_OFFSET_FILTER_METHOD', 'modified_zscore'),
+        'offset_filter_iqr_coeff': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_OFFSET_FILTER_IQR_COEFF', 1.5),
+        'offset_filter_z_threshold': _safe_float_env('ISCE_EXTERNAL_REGISTRATION_OFFSET_FILTER_Z_THRESHOLD', 3.0),
+        'offset_filter_modified_z_threshold': _safe_float_env(
+            'ISCE_EXTERNAL_REGISTRATION_OFFSET_FILTER_MODIFIED_Z_THRESHOLD',
+            3.29,
+        ),
         'fine_workers': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_WORKERS', 0),
         'fine_chunk_size': _safe_int_env('ISCE_EXTERNAL_REGISTRATION_FINE_CHUNK_SIZE', 128),
+        'fine_max_az_points': int(fine_max_az_points),
+        'fine_max_rg_points': int(fine_max_rg_points),
+        'fine_max_total_points': int(fine_max_total_points),
         'precompute_amplitude': _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_PRECOMPUTE_AMP', True),
         'max_points': int(max_points_cfg),
         'max_points_cap': int(max_points_cap),
@@ -1350,12 +1742,15 @@ def _fallback_fit_config(self):
     Configure polynomial orders for the Ampcor fallback path.
     """
     defaults = {
-        'azaz_order': _safe_int_env('ISCE_FALLBACK_MISREG_AZAZ_ORDER', 2),
-        'azrg_order': _safe_int_env('ISCE_FALLBACK_MISREG_AZRG_ORDER', 2),
-        'rgaz_order': _safe_int_env('ISCE_FALLBACK_MISREG_RGAZ_ORDER', 2),
-        'rgrg_order': _safe_int_env('ISCE_FALLBACK_MISREG_RGRG_ORDER', 2),
-        'snr': _safe_float_env('ISCE_FALLBACK_MISREG_SNR_THRESHOLD', 5.0),
+        'azaz_order': _safe_int_env('ISCE_FALLBACK_MISREG_AZAZ_ORDER', 0),
+        'azrg_order': _safe_int_env('ISCE_FALLBACK_MISREG_AZRG_ORDER', 0),
+        'rgaz_order': _safe_int_env('ISCE_FALLBACK_MISREG_RGAZ_ORDER', 0),
+        'rgrg_order': _safe_int_env('ISCE_FALLBACK_MISREG_RGRG_ORDER', 0),
+        'snr': _safe_float_env('ISCE_FALLBACK_MISREG_SNR_THRESHOLD', 18.0),
+        'min_cull_points': _safe_int_env('ISCE_FALLBACK_MISREG_MIN_CULL_POINTS', 36),
+        'cull_distances': _safe_int_list_env('ISCE_FALLBACK_MISREG_CULL_DISTANCES', [10, 5, 3, 1]),
     }
+    force_zero_order = _parse_bool_env('ISCE_FORCE_ZERO_ORDER_MISREG', False)
 
     cfg = {
         'azaz_order': _safe_nonnegative_int(
@@ -1374,8 +1769,27 @@ def _fallback_fit_config(self):
             getattr(self, 'refineTimingRangeRangeOrder', defaults['rgrg_order']),
             defaults['rgrg_order'],
         ),
-        'snr': float(getattr(self, 'refineTimingSnrThreshold', defaults['snr'])),
+        'snr': max(18.0, float(getattr(self, 'refineTimingSnrThreshold', defaults['snr']))),
+        'min_cull_points': max(1, int(defaults['min_cull_points'])),
+        'cull_distances': list(defaults['cull_distances']),
     }
+    if force_zero_order:
+        cfg['azaz_order'] = 0
+        cfg['azrg_order'] = 0
+        cfg['rgaz_order'] = 0
+        cfg['rgrg_order'] = 0
+    elif _normalization_applied(self):
+        promoted = []
+        for key in ('azaz_order', 'azrg_order', 'rgaz_order', 'rgrg_order'):
+            if int(cfg.get(key, 0)) == 0:
+                cfg[key] = 2
+                promoted.append(key)
+        if promoted:
+            logger.info(
+                'Normalization-aware fallback misreg order promotion applied: '
+                'set %s to 2 (quadratic) because normalization is active.',
+                ','.join(promoted),
+            )
 
     return cfg
 
@@ -1389,6 +1803,7 @@ def estimateOffsetField(
     search_half=40,
     num_locations_across=60,
     num_locations_down=60,
+    engine='legacy',
 ):
     '''
     Estimate offset field between burst and simamp.
@@ -1410,6 +1825,18 @@ def estimateOffsetField(
 
     objOffset = Ampcor(name='reference_offset1')
     objOffset.configure()
+    try:
+        objOffset.setEngine(str(engine))
+    except Exception as err:
+        logger.warning(
+            'Failed to set CPU Ampcor engine=%s (%s). Falling back to legacy.',
+            str(engine),
+            str(err),
+        )
+        try:
+            objOffset.setEngine('legacy')
+        except Exception:
+            pass
     template_h, template_w = _coerce_hw_pair(template_window, minimum=16)
     search_h, search_w = _coerce_hw_pair(search_half, minimum=4)
     ww = int(template_w)
@@ -1473,6 +1900,24 @@ def estimateOffsetField(
     sim.finalizeImage()
 
     result = objOffset.getOffsetField()
+    try:
+        qstat = _compute_gmtsar_quality_field(
+            result,
+            reference=reference,
+            secondary=secondary,
+        )
+        logger.info(
+            'CPU Ampcor GMTSAR-style quality refresh: updated=%d valid=%d median=%.3f window=%s.',
+            int(qstat.get('updated', 0)),
+            int(qstat.get('valid', 0)),
+            float(qstat.get('median', 0.0)),
+            str(qstat.get('window')),
+        )
+    except Exception as err:
+        logger.warning(
+            'CPU Ampcor GMTSAR-style quality refresh failed (%s); keeping native Ampcor SNR.',
+            str(err),
+        )
     return result
 
 
@@ -1681,39 +2126,238 @@ def estimateOffsetFieldGPU(
             one.setCovariance(cov_rgrg, cov_azaz, cov_azrg)
             field.addOffset(one)
 
+    try:
+        qstat = _compute_gmtsar_quality_field(
+            field,
+            reference=reference,
+            secondary=secondary,
+        )
+        logger.info(
+            'GPU Ampcor GMTSAR-style quality refresh: updated=%d valid=%d median=%.3f window=%s.',
+            int(qstat.get('updated', 0)),
+            int(qstat.get('valid', 0)),
+            float(qstat.get('median', 0.0)),
+            str(qstat.get('window')),
+        )
+    except Exception as err:
+        logger.warning(
+            'GPU Ampcor GMTSAR-style quality refresh failed (%s); keeping native Ampcor SNR.',
+            str(err),
+        )
+
     return field
 
 
+def _cap_poly_orders_by_points(az_order, rg_order, npts):
+    az = max(0, int(az_order))
+    rg = max(0, int(rg_order))
+    if npts <= 0:
+        return 0, 0
+
+    # Number of polynomial coefficients for separable 2D orders.
+    need = (az + 1) * (rg + 1)
+    while (need > int(npts)) and ((az > 0) or (rg > 0)):
+        if az >= rg and az > 0:
+            az -= 1
+        elif rg > 0:
+            rg -= 1
+        need = (az + 1) * (rg + 1)
+    return az, rg
+
+
 def fitOffsets(field,azrgOrder=0,azazOrder=0,
-        rgrgOrder=0,rgazOrder=0,snr=5.0):
+        rgrgOrder=0,rgazOrder=0,snr=18.0,min_points=36,cull_distances=None):
     '''
     Estimate constant range and azimith shifs.
     '''
+    try:
+        min_points = max(1, int(min_points))
+    except Exception:
+        min_points = 36
 
+    offsets = list(getattr(field, '_offsets', []) or [])
+    if len(offsets) <= 0:
+        raise RuntimeError('No valid offsets left after culling; cannot fit misregistration polynomials.')
 
-    stdWriter = create_writer("log","",True,filename='off.log')
+    arrays = _offset_field_arrays(field)
+    finite = (
+        np.isfinite(arrays['across'])
+        & np.isfinite(arrays['down'])
+        & np.isfinite(arrays['rg'])
+        & np.isfinite(arrays['az'])
+        & np.isfinite(arrays['snr'])
+    )
+    snr_mask = finite & (arrays['snr'] >= float(snr))
+    stage0_idx = np.flatnonzero(snr_mask)
+    logger.info(
+        'Offset culling stage-0 SNR gate (GMTSAR scale): SNR>=%.2f points %d -> %d',
+        float(snr),
+        int(len(offsets)),
+        int(stage0_idx.size),
+    )
+    if int(stage0_idx.size) <= 0:
+        raise RuntimeError('No valid offsets left after culling; cannot fit misregistration polynomials.')
 
-    for distance in [10,5,3,1]:
-        inpts = len(field._offsets)
-        print("DEBUG %%%%%%%%")
-        print(inpts)
-        print("DEBUG %%%%%%%%")
-        objOff = isceobj.createOffoutliers()
-        objOff.wireInputPort(name='offsets', object=field)
-        objOff.setSNRThreshold(snr)
-        objOff.setDistance(distance)
-        objOff.setStdWriter(stdWriter)
+    filter_method = os.environ.get('ISCE_FALLBACK_OFFSET_FILTER_METHOD', 'modified_zscore')
+    filter_keep_local, filter_summary = _gmtsar_style_filter_arrays(
+        arrays['across'][stage0_idx],
+        arrays['down'][stage0_idx],
+        arrays['rg'][stage0_idx],
+        arrays['az'][stage0_idx],
+        arrays['snr'][stage0_idx],
+        method=filter_method,
+    )
+    filtered_idx = stage0_idx[filter_keep_local]
+    if int(filtered_idx.size) < int(min_points):
+        logger.warning(
+            'GMTSAR-style offset filter would drop points below min_points (%d < %d). '
+            'Reverting to SNR-gated points.',
+            int(filtered_idx.size),
+            int(min_points),
+        )
+        work_idx = stage0_idx.copy()
+    else:
+        work_idx = filtered_idx
+    logger.info(
+        'Offset culling stage-1 GMTSAR filter (%s): points %d -> %d, '
+        'dx_bounds=%s dy_bounds=%s.',
+        str(filter_summary.get('method', filter_method)),
+        int(stage0_idx.size),
+        int(work_idx.size),
+        str(filter_summary.get('dx_bounds')),
+        str(filter_summary.get('dy_bounds')),
+    )
 
-        objOff.offoutliers()
+    trim_iter = max(0, _safe_int_env('ISCE_FALLBACK_MISREG_LINEAR_TRIM_ITERATIONS', 5))
+    trim_sigma = max(0.1, _safe_float_env('ISCE_FALLBACK_MISREG_LINEAR_TRIM_SIGMA', 2.0))
+    trim_max_fraction = min(
+        1.0,
+        max(0.01, _safe_float_env('ISCE_FALLBACK_MISREG_LINEAR_TRIM_MAX_FRACTION', 0.15)),
+    )
+    trim_min_remove = max(1, _safe_int_env('ISCE_FALLBACK_MISREG_LINEAR_TRIM_MIN_REMOVE', 1))
+    if trim_iter > 0 and int(work_idx.size) > int(min_points):
+        for ii in range(int(trim_iter)):
+            if int(work_idx.size) <= int(min_points):
+                break
 
-        field = objOff.getRefinedOffsetField()
-        outputs = len(field._offsets)
+            ac = arrays['across'][work_idx]
+            dn = arrays['down'][work_idx]
+            rg_vals = arrays['rg'][work_idx]
+            az_vals = arrays['az'][work_idx]
 
-        print('%d points left'%(len(field._offsets)))
+            a0 = np.mean(ac)
+            d0 = np.mean(dn)
+            ascale = np.std(ac)
+            dscale = np.std(dn)
+            ascale = ascale if ascale > 1.0e-6 else 1.0
+            dscale = dscale if dscale > 1.0e-6 else 1.0
+            aa = (ac - a0) / ascale
+            dd = (dn - d0) / dscale
+            # Quadratic surface fit (constant + linear + quadratic terms).
+            design = np.column_stack(
+                [
+                    np.ones_like(aa),
+                    aa,
+                    dd,
+                    aa * aa,
+                    aa * dd,
+                    dd * dd,
+                ]
+            )
 
+            coef_rg, _, _, _ = np.linalg.lstsq(design, rg_vals, rcond=None)
+            coef_az, _, _, _ = np.linalg.lstsq(design, az_vals, rcond=None)
+            pred_rg = design @ coef_rg
+            pred_az = design @ coef_az
+            residual = np.sqrt((rg_vals - pred_rg) ** 2 + (az_vals - pred_az) ** 2)
+            if residual.size <= 0:
+                break
 
-    aa, dummy = field.getFitPolynomials(azimuthOrder=azazOrder, rangeOrder=azrgOrder, usenumpy=True)
-    dummy, rr = field.getFitPolynomials(azimuthOrder=rgazOrder, rangeOrder=rgrgOrder, usenumpy=True)
+            med = float(np.median(residual))
+            mad = float(np.median(np.abs(residual - med)))
+            sigma = max(1.4826 * mad, 1.0e-6)
+            threshold = float(med + float(trim_sigma) * sigma)
+
+            bad_local = np.flatnonzero(residual > threshold)
+            if int(bad_local.size) <= 0:
+                logger.info(
+                    'Linear residual trim iteration %d/%d: no residual above threshold '
+                    '(median=%.6f, sigma=%.6f, threshold=%.6f). Stop trim.',
+                    int(ii + 1),
+                    int(trim_iter),
+                    float(med),
+                    float(sigma),
+                    float(threshold),
+                )
+                break
+
+            max_remove = max(
+                int(trim_min_remove),
+                int(np.floor(float(work_idx.size) * float(trim_max_fraction))),
+            )
+            max_remove = max(1, min(int(max_remove), int(work_idx.size) - int(min_points)))
+            if max_remove <= 0:
+                logger.warning(
+                    'Linear residual trim iteration %d would drop below min_points; stop trim.',
+                    int(ii + 1),
+                )
+                break
+
+            if int(bad_local.size) > int(max_remove):
+                order = np.argsort(residual[bad_local])[::-1]
+                remove_local = bad_local[order[:int(max_remove)]]
+            else:
+                remove_local = bad_local
+
+            if int(work_idx.size) - int(remove_local.size) < int(min_points):
+                logger.warning(
+                    'Linear residual trim iteration %d would drop below min_points '
+                    '(%d - %d < %d). Reverting this trim step and stop.',
+                    int(ii + 1),
+                    int(work_idx.size),
+                    int(remove_local.size),
+                    int(min_points),
+                )
+                break
+
+            keep_mask = np.ones(work_idx.size, dtype=bool)
+            keep_mask[remove_local] = False
+            removed_residual = residual[remove_local]
+            work_idx = work_idx[keep_mask]
+            logger.info(
+                'Linear residual trim iteration %d/%d: removed=%d '
+                '(residual median=%.6f max=%.6f threshold=%.6f), remaining=%d.',
+                int(ii + 1),
+                int(trim_iter),
+                int(remove_local.size),
+                float(np.median(removed_residual)),
+                float(np.max(removed_residual)),
+                float(threshold),
+                int(work_idx.size),
+            )
+
+    field_filtered = OffsetField()
+    for idx in work_idx.tolist():
+        field_filtered.addOffset(offsets[int(idx)])
+    field = field_filtered
+
+    final_points = len(field._offsets)
+    if final_points <= 0:
+        raise RuntimeError('No valid offsets left after culling; cannot fit misregistration polynomials.')
+
+    azaz_eff, azrg_eff = _cap_poly_orders_by_points(azazOrder, azrgOrder, final_points)
+    rgaz_eff, rgrg_eff = _cap_poly_orders_by_points(rgazOrder, rgrgOrder, final_points)
+    if (azaz_eff != int(azazOrder)) or (azrg_eff != int(azrgOrder)) or (rgaz_eff != int(rgazOrder)) or (rgrg_eff != int(rgrgOrder)):
+        logger.warning(
+            'Insufficient points for requested polynomial orders with final_points=%d. '
+            'Downgrade azpoly(%d,%d)->(%d,%d), rgpoly(%d,%d)->(%d,%d).',
+            int(final_points),
+            int(azazOrder), int(azrgOrder), int(azaz_eff), int(azrg_eff),
+            int(rgazOrder), int(rgrgOrder), int(rgaz_eff), int(rgrg_eff),
+        )
+
+    aa, dummy = field.getFitPolynomials(azimuthOrder=azaz_eff, rangeOrder=azrg_eff, usenumpy=True)
+    dummy, rr = field.getFitPolynomials(azimuthOrder=rgaz_eff, rangeOrder=rgrg_eff, usenumpy=True)
 
     azshift = aa._coeffs[0][0]
     rgshift = rr._coeffs[0][0]
@@ -1733,7 +2377,9 @@ def _save_ampcor_solution(self, outShelveFile, field, fallback_cfg, azratio, rgr
         azrgOrder=fallback_cfg['azrg_order'],
         rgazOrder=fallback_cfg['rgaz_order'],
         rgrgOrder=fallback_cfg['rgrg_order'],
-        snr=fallback_cfg['snr']
+        snr=fallback_cfg['snr'],
+        min_points=fallback_cfg.get('min_cull_points', 36),
+        cull_distances=fallback_cfg.get('cull_distances', [10, 5, 3, 1]),
     )
     odb['cull_field'] = cull
 
@@ -1780,119 +2426,176 @@ def runRefineSecondaryTiming(self):
     outShelveFile = os.path.join(misregDir, self.insar.misregFilename)
     fallback_cfg = _fallback_fit_config(self)
 
-    # Policy:
-    # 1) External coregistration is OFF by default and only enabled by
-    #    stripmapApp parameter useExternalCoregistration=True.
-    # 2) When external coregistration is disabled:
-    #      default useGPU=True -> prefer GPU Ampcor
-    #      if GPU unavailable/fails, fallback to CPU Ampcor (joint probe + coarse-to-fine)
+    forced_template_window = None
+    forced_search_half = None
+    external_enabled = _integrated_external_enabled(self)
     use_gpu_flag = bool(getattr(self, 'useGPU', True))
-    external_enabled = bool(getattr(self, 'useExternalCoregistration', False))
+    coarse_coreg_slc = os.path.join(
+        self.insar.coregDirname,
+        self._insar.coarseCoregFilename,
+    )
+    ampcor_secondary_slc = secondarySlc
+    if external_enabled:
+        # Defensive guard: external mode must always align reference-clip
+        # against secondarySlcCropProduct (normal-clip when present).
+        if os.path.basename(str(ampcor_secondary_slc)) == os.path.basename(str(self._insar.coarseCoregFilename)):
+            logger.warning(
+                'External registration detected coarse_coreg input unexpectedly; forcing secondary crop input.'
+            )
+            ampcor_secondary_slc = secondarySlc
+        logger.info(
+            'External registration input secondary forced to secondary crop (normal-clip when present): %s',
+            ampcor_secondary_slc,
+        )
+        if os.path.exists(coarse_coreg_slc) and os.path.exists(coarse_coreg_slc + '.xml'):
+            logger.info(
+                'External registration ignores coarse coreg SLC input: %s',
+                coarse_coreg_slc,
+            )
+    elif os.path.exists(coarse_coreg_slc) and os.path.exists(coarse_coreg_slc + '.xml'):
+        ampcor_secondary_slc = coarse_coreg_slc
+        logger.info(
+            'Official misregistration input secondary set to coarse coreg SLC: %s',
+            ampcor_secondary_slc,
+        )
+    else:
+        logger.warning(
+            'Official coarse coreg SLC missing (%s); fallback to secondary crop for Ampcor.',
+            coarse_coreg_slc,
+        )
 
+    ext_init_az = 0
+    ext_init_rg = 0
     if external_enabled:
         try:
             ext_cfg = _integrated_external_config()
-            offsets_dir = self.insar.offsetsDirname
-            ext_cfg['stage1_geo2rdr_azimuth_offset'] = os.path.join(
-                offsets_dir,
-                self.insar.azimuthOffsetFilename,
+            # GMTSAR-inspired external staged pipeline:
+            # stage1(auto coarse init from external large-window probe)
+            # -> stage2(window selection) -> stage3(fine fit).
+            ext_cfg['stage1_disable'] = False
+            # External path uses reference-clip vs normal-clip directly and
+            # stage-1 large-window probing for integer initial offsets.
+            ext_cfg['stage1_source'] = 'large_window_probe'
+            ext_cfg['stage1_require_geo2rdr'] = False
+            ext_cfg['staged_enable'] = True
+            # External path resamples with external offsets only; flattening is
+            # explicitly handled in interferogram with range.off.
+            ext_cfg['resample_mode'] = 'external_only'
+            try:
+                ext_cfg['resolution_m'] = float(secondaryFrame.getInstrument().getRangePixelSize())
+            except Exception:
+                ext_cfg['resolution_m'] = None
+            try:
+                ext_cfg['secondary_prf_hz'] = float(secondaryFrame.PRF)
+            except Exception:
+                ext_cfg['secondary_prf_hz'] = None
+
+            logger.info(
+                'External registration enabled: running fully external coarse/fine registration '
+                '(no ISCE Ampcor fit) and merging result into ISCE downstream flow.'
             )
-            ext_cfg['stage1_geo2rdr_range_offset'] = os.path.join(
-                offsets_dir,
-                self.insar.rangeOffsetFilename,
+            logger.info(
+                'External registration inputs: reference=%s secondary=%s',
+                referenceSlc,
+                ampcor_secondary_slc,
             )
-            external_secondary_slc = secondarySlc
-            if _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_USE_COARSE_COREG_FOR_STAGE23', True):
-                coarse_coreg = os.path.join(
-                    self.insar.coregDirname,
-                    self._insar.coarseCoregFilename,
-                )
-                if os.path.exists(coarse_coreg) and os.path.exists(coarse_coreg + '.xml'):
-                    external_secondary_slc = coarse_coreg
-                    logger.info(
-                        'Integrated external registration stage-2/3 input switched to coarse coreg SLC: %s',
-                        external_secondary_slc,
-                    )
-                else:
-                    logger.warning(
-                        'Requested coarse_coreg input for external registration stage-2/3, '
-                        'but file is missing: %s. Fallback to secondary crop SLC.',
-                        coarse_coreg,
-                    )
-            ext_gates = _integrated_external_quality_gates()
-            logger.info('Running integrated external registration with config: %s', ext_cfg)
-            logger.info('Integrated external registration quality gates: %s', ext_gates)
+
             azpoly, rgpoly, ext_meta = estimate_misregistration_polys(
                 referenceSlc,
-                external_secondary_slc,
+                ampcor_secondary_slc,
                 az_ratio=azratio,
                 rg_ratio=rgratio,
                 config=ext_cfg,
                 logger=logger,
             )
-            try:
-                _validate_external_registration_quality(ext_meta, ext_gates)
-                ext_meta['quality_gate'] = {
-                    'passed': True,
-                    'gates': ext_gates,
-                    'mode': 'strict',
-                }
-            except ExternalRegistrationQualityError as qerr:
-                ext_meta['quality_gate'] = {
-                    'passed': False,
-                    'gates': ext_gates,
-                    'mode': 'accepted_without_ampcor_fallback',
-                    'reason': str(qerr),
-                    'violations': list(getattr(qerr, 'violations', [])),
-                }
 
+            ext_init = dict((ext_meta or {}).get('initial_integer_offset') or {})
+            ext_init_az = int(ext_init.get('azimuth', 0))
+            ext_init_rg = int(ext_init.get('range', 0))
+            gates = _integrated_external_quality_gates()
+            try:
+                _validate_external_registration_quality(ext_meta, gates)
+            except ExternalRegistrationQualityError as qerr:
                 if _integrated_external_keep_on_quality_failure():
                     logger.warning(
-                        'Integrated external registration quality gate failed, '
-                        'but keeping external polynomials (no Ampcor fallback): %s',
-                        qerr,
+                        'External registration quality gate failed (%s), but keeping external '
+                        'result due to ISCE_EXTERNAL_REGISTRATION_NO_AMPCOR_FALLBACK_ON_QUALITY_FAIL=1.',
+                        str(qerr),
                     )
-                    if _integrated_external_force_dense_rubbersheet_on_quality_failure():
-                        _enable_dense_rubbersheet(
-                            self,
-                            reason='external registration quality gate failure',
-                        )
-                    _save_external_solution(self, outShelveFile, azpoly, rgpoly, ext_meta)
-                    logger.info(
-                        'Integrated external registration accepted after quality-gate failure; '
-                        'continuing with external misregistration polynomials.'
-                    )
-                    return None
-
-                raise
+                else:
+                    raise
 
             _save_external_solution(self, outShelveFile, azpoly, rgpoly, ext_meta)
-            logger.info('Integrated external registration succeeded; using generated misregistration polynomials.')
+            logger.info(
+                'External registration solution saved: initial_integer=(az=%d, rg=%d), '
+                'fit_rms=(az=%.6f, rg=%.6f), inliers=%s/%s. '
+                'Downstream remains official ISCE geometry/flattening chain.',
+                int(ext_init_az),
+                int(ext_init_rg),
+                float(((ext_meta or {}).get('fit') or {}).get('azimuth_rms', np.nan)),
+                float(((ext_meta or {}).get('fit') or {}).get('range_rms', np.nan)),
+                str(((ext_meta or {}).get('fit') or {}).get('inliers', 'NA')),
+                str(((ext_meta or {}).get('fit') or {}).get('total_points', 'NA')),
+            )
             return None
-        except Exception as err:
+        except ExternalRegistrationQualityError as err:
+            if _integrated_external_force_dense_rubbersheet_on_quality_failure():
+                _enable_dense_rubbersheet(self, 'external_quality_gate_failure')
+            if _integrated_external_no_ampcor_fallback_on_error():
+                raise
+            external_enabled = False
+            ext_init_az = 0
+            ext_init_rg = 0
             logger.warning(
-                'Integrated external registration failed (%s). Falling back to Ampcor path.',
-                err,
+                'External registration rejected by quality gates (%s); '
+                'falling back to official Ampcor path.',
+                str(err),
+            )
+        except Exception as err:
+            if _integrated_external_no_ampcor_fallback_on_error():
+                raise
+            external_enabled = False
+            ext_init_az = 0
+            ext_init_rg = 0
+            logger.warning(
+                'External registration failed (%s); falling back to official Ampcor path.',
+                str(err),
                 exc_info=True,
             )
     else:
-        logger.info('Integrated external registration disabled by useExternalCoregistration=False.')
+        logger.info(
+            'External registration disabled (useExternalCoregistration=False / '
+            'ISCE_EXTERNAL_REGISTRATION_ENABLED=0). Using official Ampcor refine path.'
+        )
+
+    logger.info(
+        'Using official geo2rdr+coarse_resample+Ampcor path.'
+    )
 
     if use_gpu_flag:
         gpu_available = _gpu_ampcor_available(self)
         if gpu_available:
             try:
                 logger.info('useGPU=True: running GPU Ampcor for misregistration.')
+                logger.info(
+                    'Ampcor probe/fit initial gross offset set to (az=%d, rg=%d).',
+                    int(ext_init_az),
+                    int(ext_init_rg),
+                )
                 gpu_prefix = os.path.join(misregDir, 'gpu_ampcor_offsets')
                 selected_gpu_cfg, _probe_metrics = _select_gpu_ampcor_template_search(
                     referenceSlc,
-                    secondarySlc,
+                    ampcor_secondary_slc,
                     misregDir,
                     snr_threshold=fallback_cfg['snr'],
+                    forced_template_window=forced_template_window,
+                    forced_search_half=forced_search_half,
+                    initial_azoffset=ext_init_az,
+                    initial_rgoffset=ext_init_rg,
                 )
                 field = _run_gpu_ampcor_with_retry(
                     referenceSlc,
-                    secondarySlc,
+                    ampcor_secondary_slc,
                     gpu_prefix,
                     azoffset=int(np.rint(float(selected_gpu_cfg.get('gross_azimuth_offset', 0.0)))),
                     rgoffset=int(np.rint(float(selected_gpu_cfg.get('gross_range_offset', 0.0)))),
@@ -1931,18 +2634,31 @@ def runRefineSecondaryTiming(self):
             )
 
     logger.info('Running CPU Ampcor for misregistration (joint probe + coarse-to-fine).')
+    cpu_engine = _cpu_ampcor_engine()
+    logger.info('CPU Ampcor engine for misregistration: %s', str(cpu_engine))
+    logger.info(
+        'Ampcor probe/fit initial gross offset set to (az=%d, rg=%d).',
+        int(ext_init_az),
+        int(ext_init_rg),
+    )
     selected_cpu_cfg, _cpu_probe_metrics = _select_cpu_ampcor_template_search(
         referenceSlc,
-        secondarySlc,
+        ampcor_secondary_slc,
         snr_threshold=fallback_cfg['snr'],
+        forced_template_window=forced_template_window,
+        forced_search_half=forced_search_half,
+        initial_azoffset=ext_init_az,
+        initial_rgoffset=ext_init_rg,
+        engine=cpu_engine,
     )
     field = estimateOffsetField(
         referenceSlc,
-        secondarySlc,
+        ampcor_secondary_slc,
         azoffset=int(np.rint(float(selected_cpu_cfg.get('gross_azimuth_offset', 0.0)))),
         rgoffset=int(np.rint(float(selected_cpu_cfg.get('gross_range_offset', 0.0)))),
         template_window=selected_cpu_cfg.get('template_window', (128, 128)),
         search_half=selected_cpu_cfg.get('refine_search_half', (32, 32)),
+        engine=cpu_engine,
     )
     logger.info('CPU Ampcor fit configuration: %s', fallback_cfg)
     _save_ampcor_solution(

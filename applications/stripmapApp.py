@@ -300,6 +300,15 @@ SECONDARY_DOPPLER_METHOD = Application.Parameter(
     type=str, mandatory=False,
     doc="Doppler calculation method. Choices: 'useDOPIQ','useDefault'.")
 
+ORBIT_INTERPOLATION_METHOD = Application.Parameter(
+    'orbitInterpolationMethod',
+    public_name='orbit interpolation method',
+    default='HERMITE',
+    type=str,
+    mandatory=False,
+    doc="Orbit interpolation method for topo/geo2rdr. Choices: HERMITE, SCH, LEGENDRE (alias: LAGRANGE->LEGENDRE).",
+)
+
 
 UNWRAPPER_NAME = Application.Parameter(
     'unwrapper_name',
@@ -493,7 +502,7 @@ USE_EXTERNAL_COREGISTRATION = Application.Parameter(
     default=False,
     type=bool,
     mandatory=False,
-    doc='Enable integrated external coregistration in refine-secondary-timing. Disabled by default.'
+    doc='Enable integrated external coregistration-assisted template/initial-offset selection in refine-secondary-timing.'
 )
 
 ############################################## Modified by V.Brancato 10.07.2019
@@ -531,10 +540,19 @@ DO_DENSEOFFSETS  = Application.Parameter('doDenseOffsets',
                                       mandatory=False,
                                       doc='')
 
+ENABLE_RDRDEM_OFFSET_LOOP = Application.Parameter(
+    'enableRdrdemOffsetLoop',
+    public_name='enable rdrdem offset loop',
+    default=True,
+    type=bool,
+    mandatory=False,
+    doc='Enable rdrdem_offset + rect_rgoffset loop for range.off geometric closure.'
+)
+
 REFINE_TIMING_AZIMUTH_AZIMUTH_ORDER = Application.Parameter(
     'refineTimingAzimuthAzimuthOrder',
     public_name='refine timing azimuth-azimuth order',
-    default=2,
+    default=0,
     type=int,
     mandatory=False,
     doc='Fallback refine-secondary-timing polynomial azimuth order for azimuth offsets.'
@@ -543,7 +561,7 @@ REFINE_TIMING_AZIMUTH_AZIMUTH_ORDER = Application.Parameter(
 REFINE_TIMING_AZIMUTH_RANGE_ORDER = Application.Parameter(
     'refineTimingAzimuthRangeOrder',
     public_name='refine timing azimuth-range order',
-    default=2,
+    default=0,
     type=int,
     mandatory=False,
     doc='Fallback refine-secondary-timing polynomial range order for azimuth offsets.'
@@ -552,7 +570,7 @@ REFINE_TIMING_AZIMUTH_RANGE_ORDER = Application.Parameter(
 REFINE_TIMING_RANGE_AZIMUTH_ORDER = Application.Parameter(
     'refineTimingRangeAzimuthOrder',
     public_name='refine timing range-azimuth order',
-    default=2,
+    default=0,
     type=int,
     mandatory=False,
     doc='Fallback refine-secondary-timing polynomial azimuth order for range offsets.'
@@ -561,7 +579,7 @@ REFINE_TIMING_RANGE_AZIMUTH_ORDER = Application.Parameter(
 REFINE_TIMING_RANGE_RANGE_ORDER = Application.Parameter(
     'refineTimingRangeRangeOrder',
     public_name='refine timing range-range order',
-    default=2,
+    default=0,
     type=int,
     mandatory=False,
     doc='Fallback refine-secondary-timing polynomial range order for range offsets.'
@@ -570,73 +588,10 @@ REFINE_TIMING_RANGE_RANGE_ORDER = Application.Parameter(
 REFINE_TIMING_SNR_THRESHOLD = Application.Parameter(
     'refineTimingSnrThreshold',
     public_name='refine timing SNR threshold',
-    default=5.0,
+    default=1.2,
     type=float,
     mandatory=False,
     doc='Fallback refine-secondary-timing SNR threshold used by offoutliers.'
-)
-
-NORMALIZE_SECONDARY_FOR_CORRELATION = Application.Parameter(
-    'normalizeSecondaryForCorrelation',
-    public_name='normalize secondary before correlation',
-    default=True,
-    type=bool,
-    mandatory=False,
-    doc='Auto-detect impactful PRF/DC mismatch and pre-normalize secondary before geo2rdr/correlation.'
-)
-
-NORMALIZE_SECONDARY_FORCE = Application.Parameter(
-    'normalizeSecondaryForce',
-    public_name='force secondary normalization',
-    default=False,
-    type=bool,
-    mandatory=False,
-    doc='Force pre-normalization of secondary PRF/DC regardless of mismatch metrics.'
-)
-
-NORMALIZE_SECONDARY_PRF_THRESHOLD = Application.Parameter(
-    'normalizeSecondaryPrfThreshold',
-    public_name='secondary PRF relative threshold',
-    default=5.0e-4,
-    type=float,
-    mandatory=False,
-    doc='Relative PRF mismatch threshold to trigger secondary pre-normalization.'
-)
-
-NORMALIZE_SECONDARY_RANGE_THRESHOLD = Application.Parameter(
-    'normalizeSecondaryRangeThreshold',
-    public_name='secondary range sampling relative threshold',
-    default=5.0e-4,
-    type=float,
-    mandatory=False,
-    doc='Relative range-sampling mismatch threshold to trigger secondary pre-normalization.'
-)
-
-NORMALIZE_SECONDARY_AZ_DRIFT_THRESHOLD = Application.Parameter(
-    'normalizeSecondaryAzimuthDriftThreshold',
-    public_name='secondary azimuth drift threshold',
-    default=1.0,
-    type=float,
-    mandatory=False,
-    doc='Estimated azimuth drift (lines) threshold to trigger PRF pre-normalization.'
-)
-
-NORMALIZE_SECONDARY_DOPPLER_THRESHOLD = Application.Parameter(
-    'normalizeSecondaryDopplerThreshold',
-    public_name='secondary doppler norm threshold',
-    default=0.02,
-    type=float,
-    mandatory=False,
-    doc='Normalized Doppler centroid mismatch threshold to trigger DC harmonization.'
-)
-
-NORMALIZE_SECONDARY_DOPPLER_TO_REFERENCE = Application.Parameter(
-    'normalizeSecondaryDopplerToReference',
-    public_name='harmonize secondary doppler',
-    default=True,
-    type=bool,
-    mandatory=False,
-    doc='When DC mismatch is impactful, copy reference Doppler polynomial to secondary metadata.'
 )
 
 DENSE_WINDOW_WIDTH = Application.Parameter('denseWindowWidth',
@@ -893,6 +848,7 @@ class _RoiBase(Application, FrameMixin):
                       CORRELATION_METHOD,
                       REFERENCE_DOPPLER_METHOD,
                       SECONDARY_DOPPLER_METHOD,
+                      ORBIT_INTERPOLATION_METHOD,
                       UNWRAPPER_NAME,
                       DO_UNWRAP,
                       SNAPHU_GMTSAR_PREPROCESS,
@@ -919,18 +875,12 @@ class _RoiBase(Application, FrameMixin):
                       RUBBERSHEET_SNR_THRESHOLD,
                       RUBBERSHEET_FILTER_SIZE,
                       DO_DENSEOFFSETS,
+                      ENABLE_RDRDEM_OFFSET_LOOP,
                       REFINE_TIMING_AZIMUTH_AZIMUTH_ORDER,
                       REFINE_TIMING_AZIMUTH_RANGE_ORDER,
                       REFINE_TIMING_RANGE_AZIMUTH_ORDER,
                       REFINE_TIMING_RANGE_RANGE_ORDER,
                       REFINE_TIMING_SNR_THRESHOLD,
-                      NORMALIZE_SECONDARY_FOR_CORRELATION,
-                      NORMALIZE_SECONDARY_FORCE,
-                      NORMALIZE_SECONDARY_PRF_THRESHOLD,
-                      NORMALIZE_SECONDARY_RANGE_THRESHOLD,
-                      NORMALIZE_SECONDARY_AZ_DRIFT_THRESHOLD,
-                      NORMALIZE_SECONDARY_DOPPLER_THRESHOLD,
-                      NORMALIZE_SECONDARY_DOPPLER_TO_REFERENCE,
                       DENSE_WINDOW_WIDTH,
                       DENSE_WINDOW_HEIGHT,
                       DENSE_SEARCH_WIDTH,
@@ -1109,6 +1059,16 @@ class _RoiBase(Application, FrameMixin):
                         role
                     )
 
+        # Use one switch to control the full rdrdem_offset + rect_rgoffset
+        # closure path and its downstream usage.
+        self.enableRdrdemOffsetLoop = bool(getattr(self, 'enableRdrdemOffsetLoop', True))
+        self.useRdrdemRectRangeOffset = bool(self.enableRdrdemOffsetLoop)
+        logger.info(
+            'Range-off closure switches: enableRdrdemOffsetLoop=%s, useRdrdemRectRangeOffset=%s',
+            str(self.enableRdrdemOffsetLoop),
+            str(self.useRdrdemRectRangeOffset),
+        )
+
         return None
 
     @property
@@ -1196,6 +1156,8 @@ class _RoiBase(Application, FrameMixin):
         self.runTopo = StripmapProc.createTopo(self)
         self.runNormalizeSecondarySampling = StripmapProc.createNormalizeSecondarySampling(self)
         self.runGeo2rdr = StripmapProc.createGeo2rdr(self)
+        self.runRdrDemOffset = StripmapProc.createRdrDemOffset(self)
+        self.runRectRangeOffset = StripmapProc.createRectRangeOffset(self)
         self.runResampleSlc = StripmapProc.createResampleSlc(self)
         self.runRefineSecondaryTiming = StripmapProc.createRefineSecondaryTiming(self)
         self.runDenseOffsets = StripmapProc.createDenseOffsets(self)
@@ -1241,6 +1203,8 @@ class _RoiBase(Application, FrameMixin):
         self.step('normalize_secondary_sampling', func=self.runNormalizeSecondarySampling)
 
         self.step('geo2rdr', func=self.runGeo2rdr)
+        self.step('rdrdem_offset', func=self.runRdrDemOffset)
+        self.step('rect_rgoffset', func=self.runRectRangeOffset)
 
         self.step('coarse_resample', func=self.runResampleSlc,
                     args=('coarse',))
@@ -1324,6 +1288,10 @@ class _RoiBase(Application, FrameMixin):
 
         # run geo2rdr (mapping from geo to radar coordinates)
         self.runGeo2rdr()
+
+        # radar-dem closure loop for range offset geometry correction
+        self.runRdrDemOffset()
+        self.runRectRangeOffset()
 
         # resampling using only geometry offsets
         self.runResampleSlc('coarse')

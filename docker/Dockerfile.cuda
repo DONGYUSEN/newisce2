@@ -215,6 +215,7 @@ COPY --from=builder /opt/isce2/src/isce2/contrib/spurt /opt/isce2/contrib/spurt
 COPY docker/README.md /opt/isce2/docker/README.md
 COPY docker/isce2_raster_convert.py /usr/local/bin/isce2-raster-convert
 COPY docker/isce2_tops_postprocess.py /usr/local/bin/isce2-tops-postprocess
+COPY examples/input_files/stripmapApp_template_detailed.xml /root/stripmapApp.template.xml
 
 RUN set -ex \
  && (dpkg -i /tmp/isce2.deb || (apt-get update && apt-get install -f -y && dpkg -i /tmp/isce2.deb)) \

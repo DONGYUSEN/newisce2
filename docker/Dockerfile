@@ -180,6 +180,7 @@ COPY --from=builder /opt/isce2/src/isce2/contrib/snaphu-py /opt/isce2/contrib/sn
 COPY --from=builder /opt/isce2/src/isce2/contrib/spurt /opt/isce2/contrib/spurt
 COPY docker/isce2_raster_convert.py /usr/local/bin/isce2-raster-convert
 COPY docker/isce2_tops_postprocess.py /usr/local/bin/isce2-tops-postprocess
+COPY examples/input_files/stripmapApp_template_detailed.xml /root/stripmapApp.template.xml
 
 RUN dpkg -i /tmp/isce2.deb
 RUN ln -s /usr/lib/python3.10/dist-packages/isce2 /usr/lib/python3.10/dist-packages/isce || true

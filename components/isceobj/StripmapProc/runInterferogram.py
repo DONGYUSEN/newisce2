@@ -9,6 +9,8 @@ import logging
 from components.stdproc.stdproc import crossmul
 from iscesys.ImageUtil.ImageUtil import ImageUtil as IU
 import os
+import glob
+import shelve
 from osgeo import gdal
 import numpy as np
 
@@ -56,7 +58,82 @@ def _infer_single_band_dtype(filename, width, length):
         )
     )
 
-	    	    
+
+def _safe_float_env(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except Exception:
+        return float(default)
+
+
+def _offset_valid_mask(arr, nodata, invalid_low):
+    mask = np.isfinite(arr)
+    if np.isfinite(nodata):
+        mask &= (arr != nodata)
+    if np.isfinite(invalid_low):
+        mask &= (arr >= invalid_low)
+    return mask
+
+
+def _load_external_registration_meta(misreg_file):
+    if not glob.glob(misreg_file + '*'):
+        return None
+    try:
+        db = shelve.open(misreg_file, flag='r')
+    except Exception:
+        return None
+    try:
+        return db.get('external_registration', None)
+    finally:
+        db.close()
+
+
+def _external_force_explicit_range_flatten(self):
+    env_override = os.environ.get('ISCE_EXTERNAL_FORCE_RANGE_FLATTEN')
+    if env_override is not None:
+        sval = str(env_override).strip().lower()
+        return sval in ('1', 'true', 'yes', 'on')
+
+    misreg_file = os.path.join(self.insar.misregDirname, self.insar.misregFilename)
+    ext_meta = _load_external_registration_meta(misreg_file)
+    if not isinstance(ext_meta, dict):
+        return False
+
+    if 'flatten_in_interferogram' in ext_meta:
+        return bool(ext_meta.get('flatten_in_interferogram'))
+    return bool(ext_meta.get('enabled', False))
+
+
+def _use_rectified_range_offset(self=None):
+    env_override = os.environ.get('ISCE_USE_RECT_RANGE_OFFSET')
+    if env_override is not None:
+        sval = str(env_override).strip().lower()
+        return sval in ('1', 'true', 'yes', 'on')
+    if self is not None and hasattr(self, 'useRdrdemRectRangeOffset'):
+        try:
+            return bool(getattr(self, 'useRdrdemRectRangeOffset'))
+        except Exception:
+            pass
+    return False
+
+
+def _resolved_range_offset_file(self):
+    default = os.path.join(self.insar.offsetsDirname, self.insar.rangeOffsetFilename)
+    if not _use_rectified_range_offset(self):
+        return default
+
+    candidates = []
+    rect_from_attr = getattr(getattr(self, '_insar', None), 'rectRangeOffsetFilename', None)
+    if rect_from_attr:
+        candidates.append(os.path.join(self.insar.offsetsDirname, os.path.basename(str(rect_from_attr))))
+    candidates.append(os.path.join(self.insar.offsetsDirname, 'range_rect.off'))
+    for cand in candidates:
+        if os.path.exists(cand) and os.path.exists(cand + '.xml'):
+            logger.info('Using rectified range offset for flat-earth removal: %s', cand)
+            return cand
+    return default
+
+
 def compute_FlatEarth(self,ifgFilename,width,length,radarWavelength):
     from imageMath import IML
     import logging
@@ -71,7 +148,7 @@ def compute_FlatEarth(self,ifgFilename,width,length,radarWavelength):
     cJ = np.complex64(-1j)
 
     # Open the range sheet offset
-    rngOff = os.path.join(self.insar.offsetsDirname, self.insar.rangeOffsetFilename )
+    rngOff = _resolved_range_offset_file(self)
     
     print(rngOff)
     if os.path.exists(rngOff):
@@ -81,13 +158,31 @@ def compute_FlatEarth(self,ifgFilename,width,length,radarWavelength):
     else:
        print('No range offsets provided')
        rng2 = np.zeros((length,width), dtype=np.float64)
-    
+
+    nodata = _safe_float_env('ISCE_GEO2RDR_OFFSET_NODATA', -999999.0)
+    invalid_low = _safe_float_env('ISCE_GEO2RDR_OFFSET_INVALID_LOW', -1.0e5)
+
     # Open the interferogram
     #ifgFilename= os.path.join(self.insar.ifgDirname, self.insar.ifgFilename)
     intf = np.memmap(ifgFilename,dtype=np.complex64,mode='r+',shape=(length,width))
-   
+    invalid_total = 0
     for ll in range(length):
-        intf[ll,:] *= np.exp(cJ*fact*rng2[ll,:])
+        line_off = np.asarray(rng2[ll, :], dtype=np.float64)
+        valid = _offset_valid_mask(line_off, nodata, invalid_low)
+        invalid_total += int(line_off.size - np.count_nonzero(valid))
+        line_off[~valid] = 0.0
+
+        intf[ll,:] *= np.exp(cJ*fact*line_off)
+
+    logger.info(
+        'compute_FlatEarth sanitized invalid range offsets: invalid=%d/%d (%.2f%%), '
+        'nodata=%.1f, invalid_low=%.1f',
+        int(invalid_total),
+        int(length * width),
+        100.0 * float(invalid_total) / float(max(length * width, 1)),
+        float(nodata),
+        float(invalid_low),
+    )
     
     del rng2
     del intf
@@ -155,7 +250,16 @@ def computeCoherence(slc1name, slc2name, corname, virtual=True):
 
 # Modified by V. Brancato on 10.09.2019 (added self)
 # Modified by V. Brancato on 11.13.2019 (added radar wavelength for low and high band flattening
-def generateIgram(self,imageSlc1, imageSlc2, resampName, azLooks, rgLooks,radarWavelength):
+def generateIgram(
+    self,
+    imageSlc1,
+    imageSlc2,
+    resampName,
+    azLooks,
+    rgLooks,
+    radarWavelength,
+    force_rangeoff_flatten=False,
+):
     objSlc1 = isceobj.createSlcImage()
     IU.copyAttributes(imageSlc1, objSlc1)
     objSlc1.setAccessMode('read')
@@ -169,7 +273,8 @@ def generateIgram(self,imageSlc1, imageSlc2, resampName, azLooks, rgLooks,radarW
     slcWidth = imageSlc1.getWidth()
     
     
-    if not self.doRubbersheetingRange:
+    apply_explicit_flatten = bool(self.doRubbersheetingRange) or bool(force_rangeoff_flatten)
+    if not apply_explicit_flatten:
      intWidth = int(slcWidth/rgLooks)    # Modified by V. Brancato intWidth = int(slcWidth / rgLooks)
     else:
      intWidth = int(slcWidth)
@@ -183,7 +288,7 @@ def generateIgram(self,imageSlc1, imageSlc2, resampName, azLooks, rgLooks,radarW
     else:
         resampAmp += '.amp'
 
-    if not self.doRubbersheetingRange:
+    if not apply_explicit_flatten:
         resampInt = resampName
     else:
         resampInt = resampName + ".full"
@@ -204,7 +309,7 @@ def generateIgram(self,imageSlc1, imageSlc2, resampName, azLooks, rgLooks,radarW
     objAmp.setAccessMode('write')
     objAmp.createImage()
     
-    if not self.doRubbersheetingRange:
+    if not apply_explicit_flatten:
        print('Rubbersheeting in range is off, interferogram is already flattened')
        objCrossmul = crossmul.createcrossmul()
        objCrossmul.width = slcWidth
@@ -215,7 +320,10 @@ def generateIgram(self,imageSlc1, imageSlc2, resampName, azLooks, rgLooks,radarW
        objCrossmul.crossmul(objSlc1, objSlc2, objInt, objAmp)
     else:
      # Modified by V. Brancato 10.09.2019 (added option to add Range Rubber sheet Flat-earth back)
-       print('Rubbersheeting in range is on, removing flat-Earth phase')
+       if self.doRubbersheetingRange:
+           print('Rubbersheeting in range is on, removing flat-Earth phase')
+       else:
+           print('External registration mode: removing flat-Earth phase with explicit range.off')
        objCrossmul = crossmul.createcrossmul()
        objCrossmul.width = slcWidth
        objCrossmul.length = lines
@@ -328,7 +436,22 @@ def runFullBandInterferogram(self):
     info = self._insar.loadProduct(self._insar.secondarySlcCropProduct)
     radarWavelength = info.getInstrument().getRadarWavelength()
     
-    generateIgram(self,img1, img2, interferogramName, azLooks, rgLooks,radarWavelength)
+    force_rangeoff_flatten = _external_force_explicit_range_flatten(self)
+    if force_rangeoff_flatten:
+        logger.info(
+            'External registration active: forcing explicit flat-earth removal with %s.',
+            _resolved_range_offset_file(self),
+        )
+    generateIgram(
+        self,
+        img1,
+        img2,
+        interferogramName,
+        azLooks,
+        rgLooks,
+        radarWavelength,
+        force_rangeoff_flatten=force_rangeoff_flatten,
+    )
 
 
     ###Compute coherence

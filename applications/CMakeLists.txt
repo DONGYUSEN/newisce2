@@ -2,6 +2,8 @@ set(files
     __init__.py
     alos2App.py
     alos2burstApp.py
+    csar2App.py
+    csar2_profiles.py
     dataTileManager.py
     dem.py
     demdb.py

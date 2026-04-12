@@ -36,6 +36,22 @@ from isceobj.Util.Poly2D import Poly2D
 
 logger = logging.getLogger('isce.insar.runTopo')
 
+_ORBIT_METHOD_CODES = {
+    'HERMITE': 0,
+    'SCH': 1,
+    'LEGENDRE': 2,
+}
+
+_ORBIT_METHOD_ALIASES = {
+    'HERMITE': 'HERMITE',
+    'SCH': 'SCH',
+    'LEGENDRE': 'LEGENDRE',
+    'LAGRANGE': 'LEGENDRE',
+    '0': 'HERMITE',
+    '1': 'SCH',
+    '2': 'LEGENDRE',
+}
+
 
 def _gpu_topo_available():
     try:
@@ -73,6 +89,39 @@ def _estimate_bbox_from_outputs(lat_filename, lon_filename, width, length):
     return bbox
 
 
+def _normalize_orbit_method(value):
+    if value is None:
+        return None
+    token = str(value).strip().upper()
+    if not token:
+        return None
+    return _ORBIT_METHOD_ALIASES.get(token)
+
+
+def _resolve_orbit_interpolation_method(self):
+    env_topo = os.environ.get('ISCE_TOPO_ORBIT_INTERPOLATION_METHOD')
+    env_global = os.environ.get('ISCE_ORBIT_INTERPOLATION_METHOD')
+    xml_value = getattr(self, 'orbitInterpolationMethod', None)
+    chosen = (
+        _normalize_orbit_method(env_topo)
+        or _normalize_orbit_method(env_global)
+        or _normalize_orbit_method(xml_value)
+        or 'HERMITE'
+    )
+    logger.info(
+        'topo orbit interpolation method: %s (env_topo=%s env_global=%s xml=%s)',
+        chosen,
+        str(env_topo),
+        str(env_global),
+        str(xml_value),
+    )
+    return chosen
+
+
+def _orbit_method_code(method_name):
+    return int(_ORBIT_METHOD_CODES.get(str(method_name).strip().upper(), 0))
+
+
 def runTopo(self):
     use_gpu = bool(getattr(self, 'useGPU', True))
     if use_gpu and _gpu_topo_available():
@@ -90,6 +139,7 @@ def runTopoCPU(self):
     from zerodop.topozero import createTopozero
 
     logger.info('Running topo on CPU')
+    orbit_method = _resolve_orbit_interpolation_method(self)
 
     geometryDir = self.insar.geometryDirname
     os.makedirs(geometryDir, exist_ok=True)
@@ -119,6 +169,7 @@ def runTopoCPU(self):
     topo.rangeFirstSample = info.startingRange
 
     topo.demInterpolationMethod = 'BIQUINTIC'
+    topo.orbitInterpolationMethod = orbit_method
     topo.latFilename = os.path.join(geometryDir, self.insar.latFilename + '.full')
     topo.lonFilename = os.path.join(geometryDir, self.insar.lonFilename + '.full')
     topo.losFilename = os.path.join(geometryDir, self.insar.losFilename + '.full')
@@ -155,6 +206,7 @@ def runTopoGPU(self):
     from zerodop.GPUtopozero.GPUtopozero import PyTopozero
 
     logger.info('Running topo on GPU')
+    orbit_method = _resolve_orbit_interpolation_method(self)
 
     geometryDir = self.insar.geometryDirname
     os.makedirs(geometryDir, exist_ok=True)
@@ -263,7 +315,7 @@ def runTopoGPU(self):
     topo.set_nRngLooks(1)
     topo.set_nAzLooks(1)
     topo.set_demMethod(5)
-    topo.set_orbitMethod(0)
+    topo.set_orbitMethod(_orbit_method_code(orbit_method))
 
     topo.set_orbitNvecs(len(state_vectors))
     topo.set_orbitBasis(1)

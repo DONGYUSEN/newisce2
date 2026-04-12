@@ -30,8 +30,25 @@ import logging
 import os
 
 import isceobj
+import numpy as np
 
 logger = logging.getLogger('isce.insar.runGeo2rdr')
+
+_ORBIT_METHOD_CODES = {
+    'HERMITE': 0,
+    'SCH': 1,
+    'LEGENDRE': 2,
+}
+
+_ORBIT_METHOD_ALIASES = {
+    'HERMITE': 'HERMITE',
+    'SCH': 'SCH',
+    'LEGENDRE': 'LEGENDRE',
+    'LAGRANGE': 'LEGENDRE',
+    '0': 'HERMITE',
+    '1': 'SCH',
+    '2': 'LEGENDRE',
+}
 
 
 def _gpu_geo2rdr_available():
@@ -56,6 +73,207 @@ def _iter_orbit_state_vectors(orbit):
     return []
 
 
+def _parse_bool(value, default=False):
+    if value is None:
+        return bool(default)
+    sval = str(value).strip().lower()
+    if sval in ('1', 'true', 't', 'yes', 'y', 'on'):
+        return True
+    if sval in ('0', 'false', 'f', 'no', 'n', 'off'):
+        return False
+    return bool(default)
+
+
+def _safe_float(value, default):
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _normalize_orbit_method(value):
+    if value is None:
+        return None
+    token = str(value).strip().upper()
+    if not token:
+        return None
+    return _ORBIT_METHOD_ALIASES.get(token)
+
+
+def _resolve_orbit_interpolation_method(self):
+    env_geo2rdr = os.environ.get('ISCE_GEO2RDR_ORBIT_INTERPOLATION_METHOD')
+    env_global = os.environ.get('ISCE_ORBIT_INTERPOLATION_METHOD')
+    xml_value = getattr(self, 'orbitInterpolationMethod', None)
+    chosen = (
+        _normalize_orbit_method(env_geo2rdr)
+        or _normalize_orbit_method(env_global)
+        or _normalize_orbit_method(xml_value)
+        or 'HERMITE'
+    )
+    logger.info(
+        'geo2rdr orbit interpolation method: %s (env_geo2rdr=%s env_global=%s xml=%s)',
+        chosen,
+        str(env_geo2rdr),
+        str(env_global),
+        str(xml_value),
+    )
+    return chosen
+
+
+def _orbit_method_code(method_name):
+    return int(_ORBIT_METHOD_CODES.get(str(method_name).strip().upper(), 0))
+
+
+def _normalization_applied(self):
+    sec_prod = ''
+    try:
+        sec_prod = str(getattr(self._insar, 'secondarySlcCropProduct', '') or '')
+    except Exception:
+        sec_prod = ''
+    if not sec_prod:
+        return False
+    token = os.path.basename(sec_prod).strip().lower()
+    return ('_norm.xml' in token) or token.endswith('_norm')
+
+
+def _infer_single_band_dtype(path, width, length):
+    npx = int(width) * int(length)
+    if npx <= 0:
+        return np.float32
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return np.float32
+
+    f32 = npx * np.dtype(np.float32).itemsize
+    f64 = npx * np.dtype(np.float64).itemsize
+    if size == f32:
+        return np.float32
+    if size == f64:
+        return np.float64
+    logger.warning(
+        'Cannot infer offset dtype from filesize: %s (size=%d, width=%d, length=%d). '
+        'Fallback to float32.',
+        path,
+        int(size),
+        int(width),
+        int(length),
+    )
+    return np.float32
+
+
+def _force_offset_to_valid_mean_if_normalized(self, offsetFilename, offset_name):
+    if not _normalization_applied(self):
+        return
+
+    xml = offsetFilename + '.xml'
+    if (not os.path.exists(offsetFilename)) or (not os.path.exists(xml)):
+        logger.warning(
+            'Normalization-aware %s mean replacement skipped: file missing (%s).',
+            offset_name,
+            offsetFilename,
+        )
+        return
+
+    offimg = isceobj.createImage()
+    offimg.load(xml)
+    width = int(offimg.getWidth())
+    length = int(offimg.getLength())
+    if (width <= 0) or (length <= 0):
+        logger.warning(
+            'Normalization-aware %s mean replacement skipped: invalid image shape (%d, %d).',
+            offset_name,
+            int(length),
+            int(width),
+        )
+        return
+
+    dtype = _infer_single_band_dtype(offsetFilename, width, length)
+    off = np.memmap(offsetFilename, dtype=dtype, mode='r+', shape=(length, width))
+
+    nodata = _safe_float(os.environ.get('ISCE_GEO2RDR_OFFSET_NODATA'), -999999.0)
+    invalid_low = _safe_float(os.environ.get('ISCE_GEO2RDR_OFFSET_INVALID_LOW'), -1.0e5)
+    valid = np.isfinite(off)
+    valid &= (off > invalid_low)
+    if np.isfinite(nodata):
+        valid &= (off != nodata)
+
+    valid_count = int(np.count_nonzero(valid))
+    if valid_count == 0:
+        logger.warning(
+            'Normalization-aware %s mean replacement skipped: no valid pixels '
+            '(nodata=%.1f, invalid_low=%.1f).',
+            offset_name,
+            float(nodata),
+            float(invalid_low),
+        )
+        del off
+        return
+
+    mean_off = float(np.mean(off[valid], dtype=np.float64))
+    off[valid] = mean_off
+    off.flush()
+    del off
+
+    logger.info(
+        'Normalization-aware %s mean replacement applied: mean=%.6f, valid=%d/%d '
+        '(nodata=%.1f, invalid_low=%.1f).',
+        offset_name,
+        mean_off,
+        valid_count,
+        int(width * length),
+        float(nodata),
+        float(invalid_low),
+    )
+
+
+def _force_azimuth_offset_to_valid_mean_if_normalized(self, azimuthOffsetFilename):
+    # Temporarily disable post-geo2rdr in-place edits on azimuth.off.
+    # Set ISCE_GEO2RDR_ENABLE_AZIMUTH_OFF_MEAN_REPLACEMENT=1 to restore.
+    if not _parse_bool(
+        os.environ.get('ISCE_GEO2RDR_ENABLE_AZIMUTH_OFF_MEAN_REPLACEMENT'),
+        default=False,
+    ):
+        logger.info(
+            'Skipping normalization-aware azimuth.off mean replacement '
+            '(temporarily disabled).'
+        )
+        return
+    _force_offset_to_valid_mean_if_normalized(self, azimuthOffsetFilename, 'azimuth.off')
+
+
+def _integrated_external_enabled(self=None):
+    env_value = os.environ.get('ISCE_EXTERNAL_REGISTRATION_ENABLED')
+    if env_value is not None:
+        return _parse_bool(env_value, default=True)
+    if self is not None and hasattr(self, 'useExternalCoregistration'):
+        try:
+            return bool(getattr(self, 'useExternalCoregistration'))
+        except Exception:
+            pass
+    return True
+
+
+def _geo2rdr_input_frame(self):
+    external_enabled = _integrated_external_enabled(self)
+    use_reference_when_external = _parse_bool(
+        os.environ.get('ISCE_GEO2RDR_USE_REFERENCE_WHEN_EXTERNAL'),
+        default=False,
+    )
+    if external_enabled and use_reference_when_external:
+        logger.info(
+            'External registration enabled and ISCE_GEO2RDR_USE_REFERENCE_WHEN_EXTERNAL=1: '
+            'geo2rdr input switched to referenceSlcCropProduct.'
+        )
+        return self._insar.loadProduct(self._insar.referenceSlcCropProduct)
+    if external_enabled:
+        logger.info(
+            'External registration enabled: geo2rdr keeps secondarySlcCropProduct '
+            '(normal-clip when present) for geometry/flatten consistency.'
+        )
+    return self._insar.loadProduct(self._insar.secondarySlcCropProduct)
+
+
 def runGeo2rdr(self):
     use_gpu = bool(getattr(self, 'useGPU', True))
     if use_gpu and _gpu_geo2rdr_available():
@@ -74,13 +292,14 @@ def runGeo2rdrCPU(self):
 
     logger.info('Running geo2rdr on CPU')
 
-    info = self._insar.loadProduct(self._insar.secondarySlcCropProduct)
+    info = _geo2rdr_input_frame(self)
 
     offsetsDir = self.insar.offsetsDirname
     os.makedirs(offsetsDir, exist_ok=True)
 
     grdr = createGeo2rdr()
     grdr.configure()
+    orbit_method = _resolve_orbit_interpolation_method(self)
 
     planet = info.getInstrument().getPlatform().getPlanet()
     grdr.slantRangePixelSpacing = info.getInstrument().getRangePixelSize()
@@ -105,9 +324,12 @@ def runGeo2rdrCPU(self):
 
     grdr.dopplerCentroidCoeffs = p
     grdr.fmrateCoeffs = [0.]
+    grdr.orbitInterpolationMethod = orbit_method
 
-    grdr.rangeOffsetImageName = os.path.join(offsetsDir, self.insar.rangeOffsetFilename)
-    grdr.azimuthOffsetImageName = os.path.join(offsetsDir, self.insar.azimuthOffsetFilename)
+    rangeOffsetFilename = os.path.join(offsetsDir, self.insar.rangeOffsetFilename)
+    azimuthOffsetFilename = os.path.join(offsetsDir, self.insar.azimuthOffsetFilename)
+    grdr.rangeOffsetImageName = rangeOffsetFilename
+    grdr.azimuthOffsetImageName = azimuthOffsetFilename
 
     latFilename = os.path.join(self.insar.geometryDirname, self.insar.latFilename + '.full')
     lonFilename = os.path.join(self.insar.geometryDirname, self.insar.lonFilename + '.full')
@@ -130,6 +352,7 @@ def runGeo2rdrCPU(self):
     grdr.outputPrecision = 'DOUBLE'
 
     grdr.geo2rdr()
+    _force_azimuth_offset_to_valid_mean_if_normalized(self, azimuthOffsetFilename)
     return
 
 
@@ -140,7 +363,8 @@ def runGeo2rdrGPU(self):
 
     logger.info('Running geo2rdr on GPU')
 
-    info = self._insar.loadProduct(self._insar.secondarySlcCropProduct)
+    info = _geo2rdr_input_frame(self)
+    orbit_method = _resolve_orbit_interpolation_method(self)
     offsetsDir = self.insar.offsetsDirname
     os.makedirs(offsetsDir, exist_ok=True)
 
@@ -182,7 +406,7 @@ def runGeo2rdrGPU(self):
         vel = sv.getVelocity()
         grdr.setOrbitVector(idx, td, pos[0], pos[1], pos[2], vel[0], vel[1], vel[2])
 
-    grdr.setOrbitMethod(0)
+    grdr.setOrbitMethod(_orbit_method_code(orbit_method))
     grdr.setWidth(info.getImage().getWidth())
     grdr.setLength(info.getImage().getLength())
     grdr.setSensingStart(DTU.seconds_since_midnight(info.getSensingStart()))
@@ -241,6 +465,7 @@ def runGeo2rdrGPU(self):
     latImage.finalizeImage()
     lonImage.finalizeImage()
     demImage.finalizeImage()
+    _force_azimuth_offset_to_valid_mean_if_normalized(self, azimuthOffsetFilename)
 
     logger.info('GPU geo2rdr completed.')
     return

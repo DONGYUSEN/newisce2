@@ -620,13 +620,10 @@ def _apply_azimuth_commonband_filter(frame, source_doppler_hz, target_doppler_hz
 
 
 def runNormalizeSecondarySampling(self):
-    if hasattr(self, 'normalizeSecondaryForCorrelation') and (not bool(self.normalizeSecondaryForCorrelation)):
+    if hasattr(self, 'normalizeSecondaryForCorrelation') or hasattr(self, 'normalizeSecondaryForce'):
         logger.info(
-            'normalizeSecondaryForCorrelation=False is ignored; secondary normalization now auto-triggers on PRF/DC/range mismatch.'
-        )
-    if hasattr(self, 'normalizeSecondaryForce') and bool(self.normalizeSecondaryForce):
-        logger.info(
-            'normalizeSecondaryForce=True is ignored; secondary normalization now uses automatic mismatch triggering.'
+            'XML normalize trigger switches are deprecated and ignored; '
+            'secondary normalization now auto-triggers from measured PRF/RSR/DC mismatch.'
         )
 
     if (self._insar.referenceSlcCropProduct is None) or (self._insar.secondarySlcCropProduct is None):
@@ -650,17 +647,17 @@ def runNormalizeSecondarySampling(self):
     az_drift_lines = abs(alpha - 1.0) * float(lines - 1)
     rg_drift_pixels = abs(beta - 1.0) * float(width - 1)
 
-    prf_threshold = max(_safe_float(getattr(self, 'normalizeSecondaryPrfThreshold', 5.0e-4), 5.0e-4), 0.0)
+    prf_threshold = max(_safe_float_env('ISCE_NORMALIZE_PRF_REL_THRESHOLD', 5.0e-4), 0.0)
     rsr_threshold = max(
-        _safe_float(getattr(self, 'normalizeSecondaryRangeThreshold', 5.0e-4), 5.0e-4),
+        _safe_float_env('ISCE_NORMALIZE_RANGE_REL_THRESHOLD', 5.0e-4),
         0.0,
     )
     drift_threshold = max(
-        _safe_float(getattr(self, 'normalizeSecondaryAzimuthDriftThreshold', 1.0), 1.0),
+        _safe_float_env('ISCE_NORMALIZE_AZ_DRIFT_LINES_THRESHOLD', 1.0),
         0.0,
     )
     dc_threshold = max(
-        _safe_float(getattr(self, 'normalizeSecondaryDopplerThreshold', 0.02), 0.02),
+        _safe_float_env('ISCE_NORMALIZE_DOPPLER_NORM_THRESHOLD', 0.02),
         0.0,
     )
 
@@ -686,6 +683,8 @@ def runNormalizeSecondarySampling(self):
     abort_on_very_low_overlap = _parse_bool_env('ISCE_DC_ABORT_ON_VERY_LOW_OVERLAP', False)
     dc_deramp_enabled = _parse_bool_env('ISCE_DC_DERAMP_ENABLE', True)
     dc_commonband_enabled = _parse_bool_env('ISCE_DC_COMMONBAND_ENABLE', True)
+    dc_force_deramp_medium = _parse_bool_env('ISCE_DC_FORCE_DERAMP_FOR_MEDIUM', True)
+    dc_force_deramp_large = _parse_bool_env('ISCE_DC_FORCE_DERAMP_FOR_LARGE', True)
 
     ref_baz_hz, ref_baz_src = _infer_total_processed_azimuth_bandwidth(self, referenceFrame, 'reference', ref_prf)
     sec_baz_hz, sec_baz_src = _infer_total_processed_azimuth_bandwidth(self, secondaryFrame, 'secondary', sec_prf)
@@ -769,6 +768,20 @@ def runNormalizeSecondarySampling(self):
             overlap_force_commonband,
             overlap_abort_threshold,
         )
+        logger.info(
+            'DC deramp policy: base_enable=%s force_medium=%s force_large=%s',
+            str(dc_deramp_enabled),
+            str(dc_force_deramp_medium),
+            str(dc_force_deramp_large),
+        )
+    logger.info(
+        'Auto-normalization thresholds: prf_rel>=%.8f range_rel>=%.8f '
+        'az_drift_lines>=%.4f doppler_norm>=%.8f',
+        prf_threshold,
+        rsr_threshold,
+        drift_threshold,
+        dc_threshold,
+    )
     logger.info(
         'PRF-triggered forced DC harmonization policy: enabled=%s effective=%s '
         '(env: ISCE_FORCE_DC_WITH_PRF; legacy alias: ISCE_LT1_FORCE_DC_WITH_PRF).',
@@ -804,13 +817,24 @@ def runNormalizeSecondarySampling(self):
         )
 
     if dc_policy_enabled and (dc_regime in ('medium', 'large')):
-        if not dc_deramp_enabled:
+        force_deramp = (
+            (dc_regime == 'medium' and bool(dc_force_deramp_medium))
+            or (dc_regime == 'large' and bool(dc_force_deramp_large))
+        )
+        deramp_effective = bool(dc_deramp_enabled) or bool(force_deramp)
+        if not deramp_effective:
             logger.warning(
                 'DC regime=%s requires deramp/reramp but ISCE_DC_DERAMP_ENABLE=0. '
                 'Proceeding without signal-level frequency shift.',
                 dc_regime,
             )
         else:
+            if (not bool(dc_deramp_enabled)) and bool(force_deramp):
+                logger.info(
+                    'DC regime=%s forcing deramp/reramp despite ISCE_DC_DERAMP_ENABLE=0 '
+                    '(force flag active).',
+                    dc_regime,
+                )
             os.makedirs(outdir, exist_ok=True)
             sec_delta_hz = _doppler_delta_hz_vector(
                 referenceFrame,
@@ -906,7 +930,7 @@ def runNormalizeSecondarySampling(self):
     )
     if dc_harmonize_required:
         harmonize = (
-            bool(getattr(self, 'normalizeSecondaryDopplerToReference', True))
+            _parse_bool_env('ISCE_NORMALIZE_HARMONIZE_DOPPLER', True)
             or force_dc_harmonize
             or dc_policy_small_harmonize
             or (dc_policy_enabled and (dc_regime in ('medium', 'large')))

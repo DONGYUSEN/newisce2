@@ -31,11 +31,60 @@ def _parse_bool_env(name, default=False):
     return _parse_bool(os.environ.get(name), default=default)
 
 
+def _integrated_external_enabled(self=None):
+    env_value = os.environ.get('ISCE_EXTERNAL_REGISTRATION_ENABLED')
+    if env_value is not None:
+        return _parse_bool_env('ISCE_EXTERNAL_REGISTRATION_ENABLED', True)
+    if self is not None and hasattr(self, 'useExternalCoregistration'):
+        try:
+            return bool(getattr(self, 'useExternalCoregistration'))
+        except Exception:
+            pass
+    return True
+
+
+def _use_rectified_range_offset(self=None):
+    env_value = os.environ.get('ISCE_USE_RECT_RANGE_OFFSET')
+    if env_value is not None:
+        return _parse_bool(env_value, default=True)
+    if self is not None and hasattr(self, 'useRdrdemRectRangeOffset'):
+        try:
+            return bool(getattr(self, 'useRdrdemRectRangeOffset'))
+        except Exception:
+            pass
+    return False
+
+
+def _resolved_range_offset_name(self, rgname):
+    if not _use_rectified_range_offset(self):
+        return rgname
+
+    offsets_dir = os.path.dirname(rgname)
+    candidates = []
+
+    rect_from_attr = getattr(getattr(self, '_insar', None), 'rectRangeOffsetFilename', None)
+    if rect_from_attr:
+        candidates.append(os.path.join(offsets_dir, os.path.basename(str(rect_from_attr))))
+    candidates.append(os.path.join(offsets_dir, 'range_rect.off'))
+
+    for cand in candidates:
+        if os.path.exists(cand) and os.path.exists(cand + '.xml'):
+            logger.info('Using rectified range offset for resampling/flatten: %s', cand)
+            return cand
+
+    logger.warning('Rectified range offset requested but not found; fallback to %s', rgname)
+    return rgname
+
+
 def _safe_float_env(name, default):
     try:
         return float(os.environ.get(name, default))
     except Exception:
         return float(default)
+
+
+def _invalid_low_threshold():
+    return _safe_float_env('ISCE_GEO2RDR_OFFSET_INVALID_LOW', -1.0e5)
 
 
 def _infer_offset_dtype(filename, width, length):
@@ -133,10 +182,12 @@ def _merge_range_poly_into_raster(rgname, width, length, rgpoly):
     return outimg
 
 
-def _valid_mask(arr, nodata):
+def _valid_mask(arr, nodata, invalid_low):
     mask = np.isfinite(arr)
     if np.isfinite(nodata):
         mask &= (arr != nodata)
+    if np.isfinite(invalid_low):
+        mask &= (arr >= invalid_low)
     return mask
 
 
@@ -169,11 +220,12 @@ def _render_like(srcname, outname, dtype):
 
 def _prepare_geo2rdr_offset_images(azname, rgname, force_mask=False):
     nodata = _safe_float_env('ISCE_GEO2RDR_OFFSET_NODATA', -999999.0)
+    invalid_low = _invalid_low_threshold()
     enable_mask = _parse_bool_env('ISCE_GEO2RDR_OFFSET_MASK_ENABLE', True)
     if force_mask:
         enable_mask = True
     emit_mask = _parse_bool_env('ISCE_GEO2RDR_OFFSET_EMIT_VALIDMASK', True)
-    fill_value = _safe_float_env('ISCE_GEO2RDR_OFFSET_FILL_VALUE', 0.0)
+    fill_value = _safe_float_env('ISCE_GEO2RDR_OFFSET_FILL_VALUE', nodata)
 
     rngImg = isceobj.createImage()
     rngImg.load(rgname + '.xml')
@@ -201,7 +253,7 @@ def _prepare_geo2rdr_offset_images(azname, rgname, force_mask=False):
     az = np.memmap(azname, dtype=az_dtype, mode='r', shape=(length, width))
     rg = np.memmap(rgname, dtype=rg_dtype, mode='r', shape=(length, width))
 
-    valid = _valid_mask(az, nodata) & _valid_mask(rg, nodata)
+    valid = _valid_mask(az, nodata, invalid_low) & _valid_mask(rg, nodata, invalid_low)
     total = int(width) * int(length)
     valid_count = int(np.count_nonzero(valid))
     invalid_count = total - valid_count
@@ -214,7 +266,7 @@ def _prepare_geo2rdr_offset_images(azname, rgname, force_mask=False):
         logger.info(
             'geo2rdr offsets diagnostic: valid=%d/%d (%.2f%%), invalid=%d, '
             'valid_bbox=[row:%s, col:%s], az[min,max,mean]=[%.4f, %.4f, %.4f], '
-            'rg[min,max,mean]=[%.4f, %.4f, %.4f], nodata=%.1f',
+            'rg[min,max,mean]=[%.4f, %.4f, %.4f], nodata=%.1f, invalid_low=%.1f',
             valid_count,
             total,
             100.0 * valid_ratio,
@@ -228,11 +280,14 @@ def _prepare_geo2rdr_offset_images(azname, rgname, force_mask=False):
             float(np.max(rg_valid)),
             float(np.mean(rg_valid)),
             nodata,
+            invalid_low,
         )
     else:
         logger.warning(
-            'geo2rdr offsets diagnostic: no valid pixels found in az/range offsets (nodata=%.1f).',
+            'geo2rdr offsets diagnostic: no valid pixels found in az/range offsets '
+            '(nodata=%.1f, invalid_low=%.1f).',
             nodata,
+            invalid_low,
         )
 
     if not enable_mask:
@@ -348,6 +403,14 @@ def runResampleSlc(self, kind='coarse'):
             print('Rubber sheeting not requested, skipping resampling ....')
             return
 
+    external_enabled = _integrated_external_enabled(self)
+    if (kind == 'coarse') and external_enabled:
+        logger.info(
+            'External registration enabled: skip coarse resample output. '
+            'geo2rdr offsets remain available for geometry/flattening chain.'
+        )
+        return
+
     logger.info("Resampling secondary SLC")
 
     secondaryFrame = self._insar.loadProduct( self._insar.secondarySlcCropProduct)
@@ -424,10 +487,13 @@ def runResampleSlc(self, kind='coarse'):
                 init_az,
                 init_rg,
             )
-            flatten = True
+            # External registration path keeps flattening explicit in interferogram
+            # (range.off based), so refined resample does not pre-flatten here.
+            flatten = False
         else:
             azname = os.path.join(offsetsDir, self.insar.azimuthOffsetFilename)
             rgname = os.path.join(offsetsDir, self.insar.rangeOffsetFilename)
+            rgname = _resolved_range_offset_name(self, rgname)
             flatten = True
     else:
         if self.doRubbersheetingAzimuth:
@@ -445,6 +511,7 @@ def runResampleSlc(self, kind='coarse'):
         else:
            print('Rubbersheeting in range is turned off, taking range geometric offsets')
            rgname = os.path.join(offsetsDir, self.insar.rangeOffsetFilename)
+           rgname = _resolved_range_offset_name(self, rgname)
            flatten=True
     
     if kind in ['coarse', 'refined']:
@@ -476,15 +543,20 @@ def runResampleSlc(self, kind='coarse'):
     rObj.outputWidth = width
     rObj.outputLines = length
 
-    # Keep flattening phase model consistent with range misregistration model.
-    # If rgpoly is applied for interpolation but not included in flattening,
-    # residual fringes can remain in topophase.flat.
-    if flatten and (rgpoly is not None):
+    # Default policy: do not merge rgpoly into range raster.
+    # Keep official-style separation: geometry raster + polynomial correction.
+    merge_rgpoly = _parse_bool_env('ISCE_REFINED_MERGE_RGPOLY_INTO_RASTER', False)
+    if flatten and (rgpoly is not None) and merge_rgpoly:
         merged = _merge_range_poly_into_raster(rgname_for_flatten, width, length, rgpoly)
         if merged is not None:
             rngImg = merged
             rObj.rangeOffsetsPoly = None
             print('Flattening uses range offsets merged with misreg polynomial.')
+    elif flatten and (rgpoly is not None):
+        logger.info(
+            'Range misregistration polynomial is kept separate from geo2rdr range raster '
+            '(ISCE_REFINED_MERGE_RGPOLY_INTO_RASTER=0).'
+        )
 
     rObj.residualRangeImage = rngImg
     rObj.residualAzimuthImage = aziImg

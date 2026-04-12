@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<insarApp>
+  <component name="insar">
+    <!-- ============================================================= -->
+    <!-- 1) REQUIRED CORE INPUTS                                       -->
+    <!-- ============================================================= -->
+    <!-- Sensor family used for both reference and secondary.
+         Typical values in this codebase: LUTAN1, GF3, DJ1, ALOS, ALOS2, Sentinel1, ... -->
+    <property name="sensor name">LUTAN1</property>
+
+    <!-- Reference scene catalog XML produced by sensor reader/prep. -->
+    <component name="reference">
+      <catalog>reference.xml</catalog>
+    </component>
+
+    <!-- Secondary scene catalog XML produced by sensor reader/prep. -->
+    <component name="secondary">
+      <catalog>secondary.xml</catalog>
+    </component>
+
+    <!-- DEM path (absolute path recommended). -->
+    <property name="demFilename">/Work/dem/dem.dem.wgs84</property>
+
+    <!-- ============================================================= -->
+    <!-- 2) GEOMETRY / PROCESSING EXTENT                              -->
+    <!-- ============================================================= -->
+    <!-- Optional processing ROI in geographic degrees: S N W E.
+         If omitted, full scene is processed. -->
+    <!-- <property name="regionOfInterest">30.10,30.90,113.20,114.10</property> -->
+
+    <!-- Optional geocoding bounding box in degrees: S N W E. -->
+    <!-- <property name="geocode bounding box">30.10,30.90,113.20,114.10</property> -->
+
+    <!-- Optional geocoded pixel spacing in degree; leave unset for defaults. -->
+    <!-- <property name="geoPosting">0.00009</property> -->
+
+    <!-- Interferogram target posting (meter-like internal spacing control). -->
+    <property name="posting">30</property>
+
+    <!-- Multilook factors (optional; set explicitly for stable products). -->
+    <property name="range looks">8</property>
+    <property name="azimuth looks">8</property>
+
+    <!-- ============================================================= -->
+    <!-- 3) SENSOR / DOPPLER / TIMING CHAIN                           -->
+    <!-- ============================================================= -->
+    <!-- Doppler methods. For LT/GF-style CSAR in this branch, useDEFAULT is recommended. -->
+    <property name="reference doppler method">useDEFAULT</property>
+    <property name="secondary doppler method">useDEFAULT</property>
+    <!-- Orbit interpolation for topo/geo2rdr: HERMITE (default), SCH, LEGENDRE.
+         Alias accepted in code: LAGRANGE -> LEGENDRE. -->
+    <property name="orbit interpolation method">HERMITE</property>
+
+    <!-- If mixing two different sensor readers, set these explicitly. -->
+    <!-- <property name="reference sensor name">LUTAN1</property> -->
+    <!-- <property name="secondary sensor name">LUTAN1</property> -->
+
+    <!-- Some sensors may need far-range crop (pixels). Keep disabled unless needed. -->
+    <!-- <property name="rangeCropFarPixels">0</property> -->
+
+    <!-- ============================================================= -->
+    <!-- 4) REGISTRATION / MISREGISTRATION CONTROL                     -->
+    <!-- ============================================================= -->
+    <!-- Prefer GPU where available; fallback path is automatic in code. -->
+    <property name="use GPU">True</property>
+
+    <!-- External registration assist switch.
+         False: official stripmap Ampcor refine path.
+         True : integrated external-assisted refine path in this branch. -->
+    <property name="use external coregistration">False</property>
+
+    <!-- Geometry closure loop switch (rdrdem_offset + rect_rgoffset). -->
+    <property name="enable rdrdem offset loop">True</property>
+
+    <!-- Dense offsets/rubbersheet controls. -->
+    <property name="do denseoffsets">True</property>
+    <property name="do rubbersheetingAzimuth">False</property>
+    <property name="do rubbersheetingRange">False</property>
+    <property name="rubber sheet SNR Threshold">5.0</property>
+    <property name="rubber sheet filter size">9</property>
+
+    <!-- Fallback refine timing polynomial orders.
+         Current project default is forced to 0-order (constant shift only). -->
+    <property name="refine timing azimuth-azimuth order">0</property>
+    <property name="refine timing azimuth-range order">0</property>
+    <property name="refine timing range-azimuth order">0</property>
+    <property name="refine timing range-range order">0</property>
+
+    <!-- Refine timing SNR threshold knob.
+         Note: code enforces effective lower bound >= 18 in fallback culling. -->
+    <property name="refine timing SNR threshold">18.0</property>
+
+    <!-- ============================================================= -->
+    <!-- 5) INTERFEROGRAM / FILTER / UNWRAP                           -->
+    <!-- ============================================================= -->
+    <property name="filter strength">0.5</property>
+
+    <!-- Optional split-spectrum / dispersive chain. Keep disabled unless needed. -->
+    <property name="do split spectrum">False</property>
+    <property name="do dispersive">False</property>
+    <!-- <property name="dispersive filter kernel x-size">800</property> -->
+    <!-- <property name="dispersive filter kernel y-size">800</property> -->
+    <!-- <property name="dispersive filter kernel sigma_x">100</property> -->
+    <!-- <property name="dispersive filter kernel sigma_y">100</property> -->
+    <!-- <property name="dispersive filter kernel rotation">0</property> -->
+    <!-- <property name="dispersive filter number of iterations">5</property> -->
+    <!-- <property name="dispersive filter mask type">connected_components</property> -->
+    <!-- <property name="dispersive filter coherence threshold">0.6</property> -->
+
+    <!-- Unwrapping controls. -->
+    <property name="do unwrap">True</property>
+    <property name="unwrapper name">snaphu</property>
+    <property name="snaphu gmtsar preprocess">True</property>
+    <property name="snaphu coherence threshold">0.10</property>
+    <property name="snaphu interpolate masked phase">False</property>
+    <property name="snaphu interpolation radius">300</property>
+
+    <!-- Optional 2-stage unwrap. -->
+    <!-- <property name="do unwrap 2 stage">False</property> -->
+    <!-- <property name="unwrapper 2stage name">REDARC0</property> -->
+    <!-- <property name="SOLVER_2STAGE">pulp</property> -->
+  </component>
+</insarApp>

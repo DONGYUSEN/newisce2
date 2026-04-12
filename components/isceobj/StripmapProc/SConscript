@@ -50,7 +50,8 @@ listFiles = ['StripmapProc.py',  'runPreprocessor.py', 'runSplitSpectrum.py',
     '__init__.py' , 'runDispersive.py' , 'runResampleSubbandSlc.py',  'runUnwrapIcu.py',
     'runFilter.py' ,  'runROI.py'  , 'runUnwrapSnaphu.py', 'runCrop.py',
     'runGeo2rdr.py', 'runRubbersheetRange.py', 'runRubbersheetAzimuth.py', '__StripmapProc.py' ,  'runInterferogram.py',
-    'runNormalizeSecondarySampling.py', 'runVerifyDEM.py', 'runGeocode.py', 'Sensor.py'
+    'runNormalizeSecondarySampling.py', 'runVerifyDEM.py', 'runGeocode.py',
+    'runRdrDemOffset.py', 'runRectRangeOffset.py', 'Sensor.py'
 ]
 
 helpList,installHelp = envisceobj['HELP_BUILDER'](envisceobj,'__init__.py',install)

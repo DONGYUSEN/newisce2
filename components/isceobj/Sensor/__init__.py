@@ -101,6 +101,8 @@ createUAVSAR_Hdf5_SLC = partial(factory_template, 'UAVSAR_HDF5_SLC')
 createSAOCOM_SLC = partial(factory_template, 'SAOCOM_SLC')
 createLUTAN1 = partial(factory_template, 'Lutan1')
 createTianyi = partial(factory_template, 'Tianyi')
+createGF3 = partial(factory_template, 'GF3')
+createDJ1 = partial(factory_template, 'DJ1')
 createALOS4 = partial(factory_template, 'ALOS4')
 createCapella = partial(factory_template, 'Capella')
 
@@ -132,6 +134,8 @@ SENSORS = {'ALOS' : createALOS,
            'SAOCOM_SLC': createSAOCOM_SLC,
            'LUTAN1': createLUTAN1,
            'TIANYI': createTianyi,
+           'GF3': createGF3,
+           'DJ1': createDJ1,
            'ALOS4': createALOS4,
            'CAPELLA': createCapella}
 
