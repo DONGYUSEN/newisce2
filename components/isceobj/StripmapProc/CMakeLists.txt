@@ -4,6 +4,7 @@ InstallSameDir(
     extractInfo.py
     Factories.py
     runCoherence.py
+    runBackproject.py
     runCrop.py
     runDenseOffsets.py
     runDispersive.py

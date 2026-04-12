@@ -10,6 +10,7 @@ InstallSameDir(
     run_downsample_unwrapper.py
     runESD.py
     runFilter.py
+    runRefocusBursts.py
     runFineOffsets.py
     runFineResamp.py
     runGeocode.py

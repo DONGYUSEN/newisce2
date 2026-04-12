@@ -20,7 +20,7 @@ envGRD['SENSOR_SCONS_INSTALL'] = os.path.join(
     envGRD['PRJ_SCONS_INSTALL'], package, 'Sensor',project)
 install = envGRD['SENSOR_SCONS_INSTALL']
 
-listFiles = ['__init__.py','GRDProduct.py','Sentinel1.py']
+listFiles = ['__init__.py','GRDProduct.py','Sentinel1.py','Radarsat2.py','Terrasarx.py']
 
 helpList,installHelp = envGRD['HELP_BUILDER'](envGRD,'__init__.py',install)
 
