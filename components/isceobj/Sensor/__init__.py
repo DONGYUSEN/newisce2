@@ -105,6 +105,7 @@ createGF3 = partial(factory_template, 'GF3')
 createDJ1 = partial(factory_template, 'DJ1')
 createALOS4 = partial(factory_template, 'ALOS4')
 createCapella = partial(factory_template, 'Capella')
+createNISAR_RSLC = partial(factory_template, 'NISAR_RSLC')
 
 SENSORS = {'ALOS' : createALOS,
            'ALOS_SLC' : createALOS_SLC,
@@ -137,7 +138,8 @@ SENSORS = {'ALOS' : createALOS,
            'GF3': createGF3,
            'DJ1': createDJ1,
            'ALOS4': createALOS4,
-           'CAPELLA': createCapella}
+           'CAPELLA': createCapella,
+           'NISAR_RSLC': createNISAR_RSLC}
 
 #These are experimental and can be added in as they become ready
 #           'JERS': createJERS,

@@ -47,6 +47,7 @@ set(installfiles
     DJ1.py
     ALOS4.py
     Capella.py
+    NISAR_RSLC.py
     )
 
 if(HDF5_FOUND)
