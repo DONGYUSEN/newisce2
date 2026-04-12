@@ -181,6 +181,9 @@ COPY --from=builder /opt/isce2/src/isce2/contrib/spurt /opt/isce2/contrib/spurt
 COPY docker/isce2_raster_convert.py /usr/local/bin/isce2-raster-convert
 COPY docker/isce2_tops_postprocess.py /usr/local/bin/isce2-tops-postprocess
 COPY examples/input_files/stripmapApp_template_detailed.xml /root/stripmapApp.template.xml
+COPY examples/input_files/topsApp_template_detailed.xml /root/topsApp.template.xml
+COPY examples/input_files/rtcApp_template_detailed.xml /root/rtcApp.template.xml
+COPY examples/input_files/image2sar_template.sh /root/image2sar.template.sh
 COPY docs/stripmapApp_flow_detailed.md /root/stripmapApp_flow_detailed.md
 COPY docs/topsApp_usage.md /root/topsApp_usage.md
 COPY docs/rtcApp_usage.md /root/rtcApp_usage.md

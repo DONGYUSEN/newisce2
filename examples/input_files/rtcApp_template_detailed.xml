@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rtcApp>
+  <component name="grdsar">
+    <!-- Core inputs -->
+    <property name="sensor name">SENTINEL1</property>
+    <component name="reference">
+      <catalog>reference.xml</catalog>
+    </component>
+
+    <!-- DEM / geocoding -->
+    <property name="demFilename">/Work/rtc/dem/dem.wgs84</property>
+    <property name="epsg id">32647</property>
+    <property name="geocode spacing">30</property>
+    <property name="geocode interpolation method">bilinear</property>
+    <!-- <property name="geocode bounding box">[S, N, W, E]</property> -->
+
+    <!-- Optional runtime knobs -->
+    <property name="useHighResolutionDemOnly">False</property>
+    <property name="apply water mask">False</property>
+    <property name="apply thermal noise correction">False</property>
+    <!-- <property name="polarizations">['VV','VH']</property> -->
+    <!-- <property name="geocode list">['gamma0','incidenceAngle']</property> -->
+  </component>
+</rtcApp>

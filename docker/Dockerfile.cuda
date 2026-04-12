@@ -216,6 +216,9 @@ COPY docker/README.md /opt/isce2/docker/README.md
 COPY docker/isce2_raster_convert.py /usr/local/bin/isce2-raster-convert
 COPY docker/isce2_tops_postprocess.py /usr/local/bin/isce2-tops-postprocess
 COPY examples/input_files/stripmapApp_template_detailed.xml /root/stripmapApp.template.xml
+COPY examples/input_files/topsApp_template_detailed.xml /root/topsApp.template.xml
+COPY examples/input_files/rtcApp_template_detailed.xml /root/rtcApp.template.xml
+COPY examples/input_files/image2sar_template.sh /root/image2sar.template.sh
 
 RUN set -ex \
  && (dpkg -i /tmp/isce2.deb || (apt-get update && apt-get install -f -y && dpkg -i /tmp/isce2.deb)) \
@@ -279,7 +282,17 @@ modules = [
 ]
 
 for name in modules:
-    module = importlib.import_module(name)
+    try:
+        module = importlib.import_module(name)
+    except ModuleNotFoundError as exc:
+        # Some builds do not package all Stripmap/TOPS helper modules.
+        if (
+            (name.startswith('isceobj.StripmapProc.') and exc.name.startswith('isceobj.StripmapProc.'))
+            or (name.startswith('isceobj.TopsProc.') and exc.name.startswith('isceobj.TopsProc.'))
+        ):
+            print('Skipping {0}: optional module missing ({1})'.format(name, exc.name))
+            continue
+        raise
     if name.endswith('runNormalizeSecondarySampling'):
         required = ('runNormalizeSecondarySampling',)
     else:

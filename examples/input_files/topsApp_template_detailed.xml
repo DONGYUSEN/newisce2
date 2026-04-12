@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<topsApp>
+  <component name="topsinsar">
+    <!-- Core inputs -->
+    <property name="sensor name">SENTINEL1</property>
+    <component name="reference">
+      <catalog>reference.xml</catalog>
+    </component>
+    <component name="secondary">
+      <catalog>secondary.xml</catalog>
+    </component>
+
+    <!-- DEM / ROI -->
+    <property name="demFilename">/Work/dem/dem.dem.wgs84</property>
+    <!-- <property name="region of interest">[30.10, 30.90, 113.20, 114.10]</property> -->
+    <!-- <property name="geocode bounding box">[30.10, 30.90, 113.20, 114.10]</property> -->
+
+    <!-- Looks -->
+    <property name="range looks">19</property>
+    <property name="azimuth looks">7</property>
+
+    <!-- Unwrap -->
+    <property name="do unwrap">True</property>
+    <property name="unwrapper name">snaphu</property>
+
+    <!-- New/important runtime knobs in this branch -->
+    <property name="use GPU">True</property>
+    <property name="offset SNR threshold">2.5</property>
+    <property name="refocus bursts with backprojection">True</property>
+
+    <!-- Optional -->
+    <property name="do ESD">True</property>
+    <property name="do dense offsets">False</property>
+    <!-- <property name="swaths">[1,2,3]</property> -->
+  </component>
+</topsApp>
