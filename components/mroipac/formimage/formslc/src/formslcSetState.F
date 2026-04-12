@@ -285,3 +285,23 @@ c~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                 enddo
         end
 
+        subroutine setTerrainHeight(array1d,dim1)
+                use formslcState
+                implicit none
+                integer dim1,i
+                real*8, dimension(dim1):: array1d
+                dim1_terrainHeight = dim1
+                if(allocated(terrainHeight)) deallocate(terrainHeight)
+                allocate(terrainHeight(dim1))
+                do i = 1, dim1
+                        terrainHeight(i) = array1d(i)
+                enddo
+        end
+
+        subroutine setUseTerrainFlag(varInt)
+                use formslcState
+                implicit none
+                integer varInt
+                useTerrainFlag = varInt
+        end
+

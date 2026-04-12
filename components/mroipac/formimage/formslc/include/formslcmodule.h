@@ -96,6 +96,10 @@ extern "C"
         PyObject * getSLCStartingRange_C(PyObject*, PyObject*);
         void getSLCStartingLine_f(int*);
         PyObject * getSLCStartingLine_C(PyObject*, PyObject*);
+        void setTerrainHeight_f(double *, int *);
+        PyObject * setTerrainHeight_C(PyObject *, PyObject *);
+        void setUseTerrainFlag_f(int *);
+        PyObject * setUseTerrainFlag_C(PyObject *, PyObject *);
 
 }
 
@@ -141,6 +145,8 @@ static PyMethodDef formslc_methods[] =
         {"setLinearResamplingDeltas_Py", setLinearResamplingDeltas_C, METH_VARARGS, " "},
         {"getSLCStartingRange_Py", getSLCStartingRange_C, METH_VARARGS, " "},
         {"getSLCStartingLine_Py", getSLCStartingLine_C, METH_VARARGS, " "},
+        {"setTerrainHeight_Py", setTerrainHeight_C, METH_VARARGS, " "},
+        {"setUseTerrainFlag_Py", setUseTerrainFlag_C, METH_VARARGS, " "},
         {NULL, NULL, 0, NULL}
 };
 #endif //formslcmodule_h

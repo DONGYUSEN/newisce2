@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import sysconfig
+
+Import('envcontrib')
+
+envbp = envcontrib.Clone()
+package = envbp['PACKAGE']
+project = 'isce3_backproject'
+envbp['PROJECT'] = project
+
+Export('envbp')
+
+thisdir = Dir('.').srcnode().abspath
+incdir = os.path.join(thisdir, 'include')
+vendordir = os.path.join(thisdir, 'vendor')
+bindingsdir = os.path.join(thisdir, 'bindings')
+
+# ----------------------------------------------------------------
+# Compiler flags
+# ----------------------------------------------------------------
+envbp.Append(CPPPATH=[incdir, vendordir])
+envbp.Append(CXXFLAGS=['-std=c++17', '-O2', '-fopenmp', '-fPIC'])
+
+# ----------------------------------------------------------------
+# Collect C++ library sources (auto-discover under include/isce3/)
+# ----------------------------------------------------------------
+cppFiles = []
+for root, dirs, files in os.walk(os.path.join(incdir, 'isce3')):
+    for f in files:
+        if f.endswith('.cpp'):
+            cppFiles.append(os.path.join(root, f))
+
+if not cppFiles:
+    print('isce3_backproject: no source files found, skipping build.')
+    Return()
+
+build = envbp['PRJ_LIB_DIR']
+install = os.path.join(envbp['PRJ_SCONS_INSTALL'], package, project)
+
+# ----------------------------------------------------------------
+# 1. Build shared library  (libisce3_backproject.so)
+# ----------------------------------------------------------------
+lib = envbp.SharedLibrary(
+    target=os.path.join(build, 'libisce3_backproject'),
+    source=cppFiles,
+)
+envbp.Install(build, lib)
+envbp.Alias('install', build)
+
+# ----------------------------------------------------------------
+# 2. Build pybind11 Python extension  (backproject.<ext_suffix>.so)
+# ----------------------------------------------------------------
+try:
+    import pybind11
+    pybind11_inc = pybind11.get_include()
+except ImportError:
+    pybind11_inc = None
+
+python_inc = sysconfig.get_path('include')
+ext_suffix = sysconfig.get_config_var('EXT_SUFFIX') or '.so'
+
+if pybind11_inc and python_inc:
+    envpy = envbp.Clone()
+    envpy.Append(CPPPATH=[pybind11_inc, python_inc])
+    # LoadableModule produces a Python-importable .so (no 'lib' prefix)
+    pymod = envpy.LoadableModule(
+        target=os.path.join(build, 'backproject' + ext_suffix),
+        source=[os.path.join(bindingsdir, 'pyBackproject.cpp')] + cppFiles,
+        SHLIBPREFIX='',
+        LDMODULEPREFIX='',
+    )
+    envpy.Install(install, pymod)
+    envpy.Alias('install', install)
+else:
+    print('isce3_backproject: pybind11 or Python headers not found, '
+          'skipping Python binding build.')
+
+# ----------------------------------------------------------------
+# 3. Install __init__.py
+# ----------------------------------------------------------------
+initFile = os.path.join(thisdir, '__init__.py')
+envbp.Install(install, [initFile])
+envbp.Alias('install', install)

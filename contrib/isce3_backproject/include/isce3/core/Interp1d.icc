@@ -1,0 +1,31 @@
+#include "detail/Interp1d.h"
+#include "detail/SSOBuffer.h"
+
+namespace isce3 { namespace core {
+
+template<typename KernelType, typename DataType>
+DataType interp1d(const Kernel<KernelType>& kernel, const DataType* x,
+        size_t length, size_t stride, double t, bool periodic)
+{
+    // Small-size optimization to avoid heap allocation.
+    const auto width = static_cast<int>(ceil(kernel.width()));
+    detail::SSOBuffer<KernelType> coeffs(width);
+    detail::SSOBuffer<DataType> data(width);
+
+    long low = 0;
+    detail::interp1d_coeffs(kernel, t, &low, coeffs.data());
+    const DataType* px = detail::get_contiguous_view_or_copy(
+            data.data(), width, low, x, length, stride, periodic);
+    auto sum = detail::inner_product(width, coeffs.data(), px);
+
+    return sum;
+}
+
+template<typename KernelType, typename DataType>
+DataType interp1d(const Kernel<KernelType>& kernel,
+        const std::valarray<DataType>& x, double t, bool periodic)
+{
+    return interp1d(kernel, &x[0], x.size(), 1, t, periodic);
+}
+
+}} // namespace isce3::core

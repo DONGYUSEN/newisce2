@@ -591,3 +591,48 @@ PyObject * setLinearResamplingDeltas_C(PyObject* self, PyObject* args)
         delete [] vectorV;
         return Py_BuildValue("i", 0);
 }
+
+PyObject * setTerrainHeight_C(PyObject* self, PyObject* args)
+{
+        PyObject * list;
+        if(!PyArg_ParseTuple(args, "O", &list))
+        {
+                return NULL;
+        }
+        if(!PyList_Check(list))
+        {
+                cout << "Error in file " << __FILE__ << " at line " << __LINE__ << ". Expecting a list type object" << endl;
+                exit(1);
+        }
+        int dim1 = PyList_Size(list);
+        double *  vectorV = new double[dim1];
+        for(int i = 0; i  < dim1; ++i)
+        {
+                PyObject * listEl = PyList_GetItem(list,i);
+                if(listEl == NULL)
+                {
+                        cout << "Error in file " << __FILE__ << " at line " << __LINE__ << ". Cannot retrieve list element" << endl;
+                        exit(1);
+                }
+                vectorV[i] = (double) PyFloat_AsDouble(listEl);
+                if(PyErr_Occurred() != NULL)
+                {
+                        cout << "Error in file " << __FILE__ << " at line " << __LINE__ << ". Cannot convert Py Object to C " << endl;
+                        exit(1);
+                }
+        }
+        setTerrainHeight_f(vectorV, &dim1);
+        delete [] vectorV;
+        return Py_BuildValue("i", 0);
+}
+
+PyObject * setUseTerrainFlag_C(PyObject* self, PyObject* args)
+{
+        int varInt;
+        if(!PyArg_ParseTuple(args, "i", &varInt))
+        {
+                return NULL;
+        }
+        setUseTerrainFlag_f(&varInt);
+        return Py_BuildValue("i", 0);
+}

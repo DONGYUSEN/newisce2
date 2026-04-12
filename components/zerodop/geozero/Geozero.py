@@ -240,7 +240,8 @@ class Geocode(Component):
         for kk in range(1,nBands):
             self.demImage.rewind()
             self.inputImage.rewind()
-            self.demCropImage.rewind()
+            if self.demCropImage is not None:
+                self.demCropImage.rewind()
             self.geoImage.rewind()
 
             inband = kk
@@ -297,10 +298,11 @@ class Geocode(Component):
         self.polyDopplerAccessor = None
 
     def createImages(self):
+        demWidth = self.computeGeoImageWidth()
+
         if self.demCropFilename:
             self.demCropImage = createDemImage()
             demAccessMode = 'write'
-            demWidth = self.computeGeoImageWidth()
             self.demCropImage.initImage(self.demCropFilename,demAccessMode,demWidth)
             self.demCropImage.createImage()
             self.demCropAccessor = self.demCropImage.getImagePointer()

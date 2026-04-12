@@ -67,6 +67,8 @@
                         #define setStartRangeBin_f setstartrangebin_
                         #define getSLCStartingRange_f getslcstartingrange_
                         #define getSLCStartingLine_f getslcstartingline_
+                        #define setTerrainHeight_f setterrainheight_
+                        #define setUseTerrainFlag_f setuseterrainflag_
                 #elif defined(F77EXTERNS_NOTRAILINGBAR)
                         #define allocate_dopplerCoefficients_f allocate_dopplerCoefficients
                         #define allocate_linearResampCoeff_f allocate_linearResampCoeff
@@ -118,6 +120,10 @@
                         #define setSpacecraftHeight_f setSpacecraftHeight
                         #define setSpectralShiftFractions_f setSpectralShiftFractions
                         #define setStartRangeBin_f setStartRangeBin
+                        #define getSLCStartingRange_f getSLCStartingRange
+                        #define getSLCStartingLine_f getSLCStartingLine
+                        #define setTerrainHeight_f setTerrainHeight
+                        #define setUseTerrainFlag_f setUseTerrainFlag
                 #elif defined(F77EXTERNS_EXTRATRAILINGBAR)
                         #define allocate_dopplerCoefficients_f allocate_dopplerCoefficients__
                         #define allocate_linearResampCoeff_f allocate_linearResampCoeff__
@@ -169,6 +175,10 @@
                         #define setSpacecraftHeight_f setSpacecraftHeight__
                         #define setSpectralShiftFractions_f setSpectralShiftFractions__
                         #define setStartRangeBin_f setStartRangeBin__
+                        #define getSLCStartingRange_f getSLCStartingRange__
+                        #define getSLCStartingLine_f getSLCStartingLine__
+                        #define setTerrainHeight_f setTerrainHeight__
+                        #define setUseTerrainFlag_f setUseTerrainFlag__
                 #elif defined(F77EXTERNS_UPPERCASE_NOTRAILINGBAR)
                         #define allocate_dopplerCoefficients_f ALLOCATE_DOPPLERCOEFFICIENTS
                         #define allocate_linearResampCoeff_f ALLOCATE_LINEARRESAMPCOEFF
@@ -220,6 +230,10 @@
                         #define setSpacecraftHeight_f SETSPACECRAFTHEIGHT
                         #define setSpectralShiftFractions_f SETSPECTRALSHIFTFRACTIONS
                         #define setStartRangeBin_f SETSTARTRANGEBIN
+                        #define getSLCStartingRange_f GETSLCSTARTINGRANGE
+                        #define getSLCStartingLine_f GETSLCSTARTINGLINE
+                        #define setTerrainHeight_f SETTERRAINHEIGHT
+                        #define setUseTerrainFlag_f SETUSETERRAINFLAG
                 #elif defined(F77EXTERNS_COMPAQ_F90)
                         #define allocate_dopplerCoefficients_f allocate_dopplerCoefficients_
                         #define allocate_linearResampCoeff_f allocate_linearResampCoeff_
@@ -271,6 +285,10 @@
                         #define setSpacecraftHeight_f setSpacecraftHeight_
                         #define setSpectralShiftFractions_f setSpectralShiftFractions_
                         #define setStartRangeBin_f setStartRangeBin_
+                        #define getSLCStartingRange_f getSLCStartingRange_
+                        #define getSLCStartingLine_f getSLCStartingLine_
+                        #define setTerrainHeight_f setTerrainHeight_
+                        #define setUseTerrainFlag_f setUseTerrainFlag_
                 #else
                         #error Unknown traslation for FORTRAN external symbols
                 #endif

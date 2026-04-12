@@ -1,15 +1,18 @@
       subroutine ACpatch(trans,nnn,nl,r0,delr,
      1     wavl,vel,fd,fdd,fddd,fdddd,prf,ht,re,
      2     gm,r_platvel,r_platacc,i_lrl,
-     3     npfin,a2,a4,slope,inter,ideskew,na_valid)
+     3     npfin,a2,a4,slope,inter,ideskew,na_valid,
+     4     h_terrain,iuseterrain)
       
       implicit none
       REAL*8       PI,PI2
-      integer nnn,nl,ideskew,npfin,na_valid
+      integer nnn,nl,ideskew,npfin,na_valid,iuseterrain
       real*4 vel, prf,a2,a4, y2, phi, dx, veleff
       real*8 r0, delr,wavl,fd,fdd,fddd, fdddd, ht,slope,inter
       real*8 r(nl), phase, az, re, gm, th, thaz, sinsqref, acc, dot
       real*8 r_platvel(3), r_platacc(3), r_lookvec(3), r_vdotl, r_adotl,r_veln
+      real*8 h_terrain(nl)
+      real*8 r_target
       integer*4 i, j, k, i_lrl
       integer*4 n, nfc, nf0
       complex*8 trans(nnn,nl),ref(nnn)
@@ -39,9 +42,16 @@
       do i = 1 , nl
          r(i) = r0 + float(i-1)*delr
          f0(i) = fd + ( fdd + ( fddd+fdddd*r(i) ) *r(i) )*r(i)
-         th=dacos(((ht+re)**2+r(i)*r(i)-re**2)/(2.d0*r(i)*(re+ht)))
+         if(iuseterrain.eq.1) then
+            r_target = re + h_terrain(i)
+         else
+            r_target = re
+         end if
+         th=dacos(((ht+re)**2+r(i)*r(i)-r_target**2)
+     $        /(2.d0*r(i)*(re+ht)))
          if(i_lrl .eq. 0) then
-            sinsqref = f0(i) * wavl/(2.d0*vel*sqrt(re/(re+ht))*sin(th))
+            sinsqref = f0(i) * wavl/(2.d0*vel*sqrt(r_target/(re+ht))
+     $           *sin(th))
             f_rate(i) = (2.d0/wavl)*(acc*cos(th)+((vel*sinsqref)**2-vel**2)/r(i))
             veleff = sqrt(abs(acc*cos(th)*r(i)+(vel*sinsqref)**2-vel**2))
          else

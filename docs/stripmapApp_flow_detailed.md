@@ -8,6 +8,48 @@
 - dense offsets / rubbersheet / fine resample 的触发条件
 - split-spectrum / 子带干涉 / dispersive 处理链
 
+## 0. Usage 速查（含 backproject 集成）
+
+### 0.1 命令行
+
+```bash
+stripmapApp.py <input-file.xml>
+stripmapApp.py --steps
+stripmapApp.py --help
+stripmapApp.py --help --steps
+```
+
+### 0.2 分步运行与续跑
+
+```bash
+# 查看所有步骤
+stripmapApp.py stripmapApp.xml --steps
+
+# 从指定步骤到指定步骤
+stripmapApp.py stripmapApp.xml --steps --start=geo2rdr --end=geocode
+```
+
+常见步骤名（与代码一致）：
+`startup, preprocess, cropraw, formslc, cropslc, verifyDEM, topo, normalize_secondary_sampling, geo2rdr, rdrdem_offset, rect_rgoffset, coarse_resample, misregistration, refined_resample, dense_offsets, rubber_sheet_range, rubber_sheet_azimuth, fine_resample, split_range_spectrum, sub_band_resample, interferogram, filter, unwrap, sub_band_interferogram, filter_low_band, filter_high_band, unwrap_low_band, unwrap_high_band, ionosphere, geocode, geocodeoffsets`
+
+### 0.3 配置 backproject focuser
+
+`stripmapApp.py` 现支持两种聚焦器：
+- `formslc`（默认，ROI range-Doppler）
+- `backproject`（ISCE3 时域后向投影）
+
+在 XML 中设置：
+
+```xml
+<property name="focuser">backproject</property>
+```
+
+默认值：
+
+```xml
+<property name="focuser">formslc</property>
+```
+
 ## 1. 主流程图（端到端）
 
 ```mermaid

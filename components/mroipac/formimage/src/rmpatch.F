@@ -1,5 +1,5 @@
       subroutine rmpatch(trans,slope,inter,nnn,nl,nls,r0,delr,wavl,vel
-     $     ,ht,re,fd,fdd,fddd,fdddd,prf,ideskew)
+     $     ,ht,re,fd,fdd,fddd,fdddd,prf,ideskew,h_terrain,iuseterrain)
 
         implicit none
         real*4 pi, pi2
@@ -7,11 +7,13 @@
         real*8     r0,delr,wavl,fd,fdd,fddd,fdddd, slope, inter, tmpd
         real*8     rd0v1(nl),ht,re, gm, th, sinsqref, acc
         real*4        vel,prf, v1, veleff
-        integer*4     nfilter, nnn, nl, nls,ideskew
+        integer*4     nfilter, nnn, nl, nls,ideskew, iuseterrain
         real*4        xintp, freq
 	real*4        frac, ratio
 	integer*4     na,i,ifrac, n, k
 	complex*8     trans(nnn,nl)
+        real*8        h_terrain(nl)
+        real*8        r_target
 
         integer firsttime
         real*4 f0(nl), f_rate(nl),bdel(nl)
@@ -45,9 +47,15 @@
         do i = 1, nl
            r(i)      = r0 + (i-1)*delr !range to the line
            f0(i) = fd + ( fdd + ( fddd+fdddd*r(i) ) *r(i) )*r(i)
-           th=dacos(((ht+re)**2+r(i)*r(i)-re**2)/(2.d0*r(i)*(re
-     $          +ht)))
-           sinsqref = f0(i) * wavl/(2.d0*vel*sqrt(re/(re+ht))*sin(th))
+           if(iuseterrain.eq.1) then
+              r_target = re + h_terrain(i)
+           else
+              r_target = re
+           end if
+           th=dacos(((ht+re)**2+r(i)*r(i)-r_target**2)
+     $          /(2.d0*r(i)*(re+ht)))
+           sinsqref = f0(i) * wavl/(2.d0*vel*sqrt(r_target/(re+ht))
+     $          *sin(th))
            f_rate(i) = (2.d0/wavl)*(acc*cos(th)+((vel*sinsqref)**2-vel
      $          **2)/r(i))
            veleff = sqrt(wavl*abs(f_rate(i))*r(i)/(2.d0))

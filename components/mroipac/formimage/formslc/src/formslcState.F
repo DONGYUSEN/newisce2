@@ -51,4 +51,7 @@ c~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                 real*8, dimension(4) ::  linearResampDeltas
                 real*8  slc_r0
                 integer*4  slc_line0
+                real*8, allocatable, dimension(:) ::  terrainHeight
+                integer dim1_terrainHeight
+                integer useTerrainFlag
         end module 

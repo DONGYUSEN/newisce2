@@ -57,6 +57,13 @@
 !c get image line sizes.
       allocate(dataLineSet(nlinesaz))
       allocate(dataLineGet(nbytes1))
+
+c     Initialize terrain height array if not already set
+      if(.not.allocated(terrainHeight)) then
+         useTerrainFlag = 0
+         allocate(terrainHeight(nlinesaz))
+         terrainHeight = 0.d0
+      end if
 !c     
 !**********  input parameters  **********
 !c     
@@ -130,6 +137,7 @@ c where single variables
       write(6,*) 'Radar Wavelength (m) ', wavl
       write(6,*) 'Range Spectral Weighting ', rhww
       write(6,*) 'Fractional bandwidth to remove ', pctbw, pctbwaz
+      write(6,*) 'Use terrain-dependent RCMC ', useTerrainFlag
       write(6,*) 'linear resampling coefs:  sloper, intr, slopea, inta',
      .     sloper,interr,slopea, intera
       write(6,*) 'linear resampling deltas: dsloper, dintr, dslopea, dinta'
@@ -502,7 +510,8 @@ c     start the range migration correction for file 1
          nl=nlinesaz
          r=r01
             call RMpatch(trans,0.d0,0.d0,
-     .           nnn,nl,nls,r,delr,wavl,vel1,ht1,re,fd1,fdd1,fddd1,fdddd1,prf1,ideskew
+     .           nnn,nl,nls,r,delr,wavl,vel1,ht1,re,fd1,fdd1,fddd1,
+     .           fdddd1,prf1,ideskew,terrainHeight,useTerrainFlag
      $           )
             t1=seconds(t0)
             write(6,*) 'range migrated ',t1, ' sec'
@@ -515,7 +524,8 @@ c multiply by reference and inverse transform lines for file 1
          call ACpatch(trans,nnn,nl,r,delr,
      .           wavl,vel1,fd1,fdd1,fddd1,fdddd1,prf1,ht1,re,
      .           gm,r_platvel1,r_platacc1,i_lrl,
-     .           npfin1,a21,a41,0.d0,0.d0,ideskew,na_valid)
+     .           npfin1,a21,a41,0.d0,0.d0,ideskew,na_valid,
+     .           terrainHeight,useTerrainFlag)
 
          t1=seconds(t0)
          write(6,*) 'Range-Doppler done',t1,' sec'
@@ -566,6 +576,7 @@ c     if first time through, save complex images for file 2
       DEALLOCATE( spec )
       DEALLOCATE( dataLineSet )
       DEALLOCATE( dataLineGet )
+      if(allocated(terrainHeight)) DEALLOCATE( terrainHeight )
       
 
       end

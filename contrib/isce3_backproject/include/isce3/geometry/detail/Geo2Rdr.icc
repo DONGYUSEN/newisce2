@@ -1,0 +1,238 @@
+#include <cmath>
+#include <limits>
+
+#include <isce3/core/Ellipsoid.h>
+#include <isce3/core/Orbit.h>
+#include <isce3/core/Vector.h>
+#include <isce3/math/RootFind1dBracket.h>
+
+namespace isce3::geometry::detail {
+
+NVCC_HD_WARNING_DISABLE
+template<class DopplerModel>
+CUDA_HOSTDEV isce3::error::ErrorCode
+computeDopplerAztimeDiff(double* dt, double t, double r,
+                         const isce3::core::Vec3& rvec,
+                         const isce3::core::Vec3& vel,
+                         const DopplerModel& doppler, double wvl, double dr)
+{
+    using isce3::error::ErrorCode;
+
+    // Check for out-of-bounds LUT evaluation (LUT2d's internal handling of
+    // out-of-bounds lookup is not thread-safe)
+    if (doppler.boundsError()) {
+        if (not(doppler.contains(t, r) and doppler.contains(t, r + dr))) {
+            return ErrorCode::OutOfBoundsLookup;
+        }
+    }
+
+    // compute Doppler
+    const auto dopfact = rvec.dot(vel);
+    const auto fdop = 0.5 * wvl * doppler.eval(t, r);
+
+    // use forward difference to compute Doppler derivative
+    const auto fdopder = (0.5 * wvl * doppler.eval(t, r + dr) - fdop) / dr;
+
+    // evaluate cost function and its derivative
+    const auto fn = dopfact - fdop * r;
+    const auto c1 = -vel.dot(vel);
+    const auto c2 = (fdop / r) + fdopder;
+    const auto fnprime = c1 + c2 * dopfact;
+
+    // set output value
+    if (dt) {
+        *dt = fn / fnprime;
+    }
+
+    return ErrorCode::Success;
+}
+
+NVCC_HD_WARNING_DISABLE
+template<class Orbit>
+CUDA_HOSTDEV isce3::error::ErrorCode
+updateAztime(double* t, const Orbit& orbit, const isce3::core::Vec3& xyz,
+             isce3::core::LookSide side,
+             double rmin = std::numeric_limits<double>::quiet_NaN(),
+             double rmax = std::numeric_limits<double>::quiet_NaN())
+{
+    using namespace isce3::core;
+    using isce3::error::ErrorCode;
+
+    // compute azimuth time spacing for coarse grid search
+    constexpr static int num_aztime_test = 15;
+    const auto tstart = orbit.startTime();
+    const auto tend = orbit.endTime();
+    const auto dt = (tend - tstart) / (num_aztime_test - 1);
+
+    // find azimuth time with minimum valid range distance to target
+    double r_closest = 1e16;
+    double t_closest = -1000.;
+    for (int k = 0; k < num_aztime_test; ++k) {
+
+        const auto tt = tstart + k * dt;
+        if (tt < tstart or tt > tend) {
+            continue;
+        }
+
+        // interpolate orbit
+        Vec3 pos, vel;
+        orbit.interpolate(&pos, &vel, tt, OrbitInterpBorderMode::FillNaN);
+
+        // compute slant range
+        const auto rvec = xyz - pos;
+
+        // check look side (only first time)
+        if (k == 0) {
+            // (Left && positive) || (Right && negative)
+            if ((side == LookSide::Right) xor (rvec.cross(vel).dot(pos) > 0.)) {
+                return ErrorCode::WrongLookSide;
+            }
+        }
+
+        const auto r = rvec.norm();
+
+        // check validity
+        if (not std::isnan(rmin) and r < rmin) {
+            continue;
+        }
+        if (not std::isnan(rmax) and r > rmax) {
+            continue;
+        }
+
+        // update best guess
+        if (r < r_closest) {
+            r_closest = r;
+            t_closest = tt;
+        }
+    }
+
+    // if we did not find a good guess, use tmid as intial guess
+    *t = (t_closest < 0.) ? orbit.midTime() : t_closest;
+    return ErrorCode::Success;
+}
+
+NVCC_HD_WARNING_DISABLE
+template<class Orbit, class DopplerModel>
+CUDA_HOSTDEV isce3::error::ErrorCode
+geo2rdr(double* t, double* r, const isce3::core::Vec3& llh,
+        const isce3::core::Ellipsoid& ellipsoid, const Orbit& orbit,
+        const DopplerModel& doppler, double wvl, isce3::core::LookSide side,
+        double t0, const Geo2RdrParams& params)
+{
+    using namespace isce3::core;
+    using isce3::error::ErrorCode;
+
+    // convert LLH to ECEF
+    const auto xyz = ellipsoid.lonLatToXyz(llh);
+
+    // get initial azimuth time guess
+    if (t0 >= orbit.startTime() and t0 <= orbit.endTime()) {
+        *t = t0;
+    } else {
+        // perform a coarse grid search over the orbit's span for the azimuth
+        // time point that minimizes the range to the target
+        const auto status = updateAztime(t, orbit, xyz, side);
+        if (status != ErrorCode::Success) {
+            return status;
+        }
+    }
+
+    // Newton step, initialized to zero.
+    double dt = 0.0;
+
+    // begin iterations
+    for (int i = 0; i < params.maxiter; ++i) {
+        // apply Newton step here so that (r,t) are always consistent on return.
+        *t -= dt;
+
+        // interpolate orbit
+        Vec3 pos, vel;
+        orbit.interpolate(&pos, &vel, *t, OrbitInterpBorderMode::FillNaN);
+
+        // compute slant range from satellite to ground point
+        const auto rvec = xyz - pos;
+        *r = rvec.norm();
+
+        // Check look side (only first time)
+        if (i == 0) {
+            // (Left && positive) || (Right && negative)
+            if ((side == LookSide::Right) xor (rvec.cross(vel).dot(pos) > 0.)) {
+                return ErrorCode::WrongLookSide;
+            }
+        }
+
+        // update guess for azimuth time
+        const auto status = computeDopplerAztimeDiff(&dt, *t, *r, rvec, vel,
+                                                     doppler, wvl, params.delta_range);
+        if (status != ErrorCode::Success) {
+            return status;
+        }
+
+        // check for convergence
+        if (std::abs(dt) < params.threshold) {
+            return ErrorCode::Success;
+        }
+    }
+
+    // if we reach this point, no convergence for specified threshold
+    return ErrorCode::FailedToConverge;
+}
+
+
+NVCC_HD_WARNING_DISABLE
+template<class Orbit, class DopplerModel>
+CUDA_HOSTDEV isce3::error::ErrorCode
+geo2rdr_bracket(double* aztime,
+        double* range, const isce3::core::Vec3& x, const Orbit& orbit,
+        const DopplerModel& doppler, double wavelength,
+        isce3::core::LookSide side, const Geo2RdrBracketParams& params)
+{
+    using namespace isce3::core;
+    using isce3::error::ErrorCode;
+
+    const double t0 = params.time_start.value_or([&]() {
+        if (doppler.haveData()) {
+            return std::max(orbit.startTime(), doppler.yStart());
+        }
+        return orbit.startTime();
+    }());
+    const double t1 = params.time_end.value_or([&]() {
+        if (doppler.haveData()) {
+            return std::min(orbit.endTime(), doppler.yEnd());
+        }
+        return orbit.endTime();
+    }());
+
+    // Platform position & velocity, and slant range vector
+    Vec3 xp, v, r;
+
+    // Calculate Doppler at time t and compute the difference with known
+    // Doppler centroid.
+    auto doppler_error = [&](double t) {
+        orbit.interpolate(&xp, &v, t, OrbitInterpBorderMode::FillNaN);
+        r = x - xp;
+        const double rnorm = r.norm();
+        double fd = doppler.eval(t, rnorm);
+        return 2.0 / wavelength * v.dot(r) / rnorm - fd;
+    };
+
+    const auto err = isce3::math::find_zero_brent(
+            t0, t1, doppler_error, params.tol_aztime, aztime);
+    if (err != ErrorCode::Success) {
+        return err;
+    }
+
+    // Compute range at aztime solution (may not be final iteration of solver).
+    orbit.interpolate(&xp, &v, *aztime, OrbitInterpBorderMode::FillNaN);
+    r = x - xp;
+    *range = r.norm();
+
+    // Save left/right check for the end in case orbit is curving, e.g. at pole.
+    // (Left && positive) || (Right && negative)
+    if ((side == LookSide::Right) ^ (r.cross(v).dot(xp) > 0)) {
+        return ErrorCode::WrongLookSide;
+    }
+    return ErrorCode::Success;
+}
+
+} // namespace isce3::geometry::detail
