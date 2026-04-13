@@ -346,7 +346,7 @@ SNAPHU_GMTSAR_PREPROCESS = Application.Parameter(
 SNAPHU_CORR_THRESHOLD = Application.Parameter(
     "snaphuCorrThreshold",
     public_name="snaphu coherence threshold",
-    default=0.10,
+    default=0.20,
     type=float,
     mandatory=False,
     doc="Coherence threshold used for snaphu GMTSAR-style preprocessing.",

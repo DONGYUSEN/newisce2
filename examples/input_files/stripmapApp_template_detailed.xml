@@ -111,7 +111,7 @@
     <property name="do unwrap">True</property>
     <property name="unwrapper name">snaphu</property>
     <property name="snaphu gmtsar preprocess">True</property>
-    <property name="snaphu coherence threshold">0.10</property>
+    <property name="snaphu coherence threshold">0.20</property>
     <property name="snaphu interpolate masked phase">False</property>
     <property name="snaphu interpolation radius">300</property>
 

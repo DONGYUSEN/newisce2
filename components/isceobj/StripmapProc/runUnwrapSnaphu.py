@@ -192,7 +192,7 @@ def runSnaphu(self, igramSpectrum = "full", costMode = None,initMethod = None, d
     snaphu_int_format = 'COMPLEX_DATA'
 
     if bool(getattr(self, 'snaphuGmtsarPreprocess', True)):
-        corr_thr = float(getattr(self, 'snaphuCorrThreshold', 0.10))
+        corr_thr = float(getattr(self, 'snaphuCorrThreshold', 0.20))
         do_interp = bool(getattr(self, 'snaphuInterpMaskedPhase', False))
         interp_radius = int(getattr(self, 'snaphuInterpRadius', 300))
         logger.info(
@@ -305,4 +305,3 @@ def runUnwrap(self, igramSpectrum = "full"):
     runSnaphu(self, igramSpectrum = igramSpectrum, costMode = 'SMOOTH',initMethod = 'MCF', defomax = 2, initOnly = True)
 
     return
-

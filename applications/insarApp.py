@@ -196,6 +196,42 @@ DO_UNWRAP = Application.Parameter(
     doc="True if unwrapping is desired. To be unsed in combination with UNWRAPPER_NAME."
 )
 
+SNAPHU_GMTSAR_PREPROCESS = Application.Parameter(
+    'snaphuGmtsarPreprocess',
+    public_name='snaphu gmtsar preprocess',
+    default=True,
+    type=bool,
+    mandatory=False,
+    doc='Enable GMTSAR-style coherence-mask preprocessing before snaphu unwrapping.',
+)
+
+SNAPHU_CORR_THRESHOLD = Application.Parameter(
+    'snaphuCorrThreshold',
+    public_name='snaphu coherence threshold',
+    default=0.20,
+    type=float,
+    mandatory=False,
+    doc='Coherence threshold used for snaphu GMTSAR-style preprocessing.',
+)
+
+SNAPHU_INTERP_MASKED_PHASE = Application.Parameter(
+    'snaphuInterpMaskedPhase',
+    public_name='snaphu interpolate masked phase',
+    default=False,
+    type=bool,
+    mandatory=False,
+    doc='Interpolate masked wrapped phase before snaphu (GMTSAR interp-style).',
+)
+
+SNAPHU_INTERP_RADIUS = Application.Parameter(
+    'snaphuInterpRadius',
+    public_name='snaphu interpolation radius',
+    default=300,
+    type=int,
+    mandatory=False,
+    doc='Interpolation search radius in pixels for masked wrapped phase.',
+)
+
 DO_UNWRAP_2STAGE = Application.Parameter(
     'do_unwrap_2stage',
     public_name='do unwrap 2 stage',
@@ -575,6 +611,10 @@ class _InsarBase(Application, FrameMixin):
                       UNWRAP,
                       UNWRAPPER_NAME,
                       DO_UNWRAP,
+                      SNAPHU_GMTSAR_PREPROCESS,
+                      SNAPHU_CORR_THRESHOLD,
+                      SNAPHU_INTERP_MASKED_PHASE,
+                      SNAPHU_INTERP_RADIUS,
                       DO_OFFSETPRF,
                       DO_RGOFFSET,
                       USE_HIGH_RESOLUTION_DEM_ONLY,
