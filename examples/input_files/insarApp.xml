@@ -199,6 +199,10 @@ files directly in the insarApp.xml file as in the following example for ALOS:
              grass, icu, snaphu, snaphu_mcf-->
         <!--<property name="unwrap">True</property>-->
         <!--<property name="unwrapper name">snaphu_mcf</property>-->
+        <!--<property name="snaphu tile nrow">2</property>-->
+        <!--<property name="snaphu tile ncol">2</property>-->
+        <!--<property name="snaphu row overlap">400</property>-->
+        <!--<property name="snaphu col overlap">400</property>-->
 
         <!-- 2 Stage unwrapping option requires the following tags:-->
         <!--<property name="do unwrap">True</property> -->

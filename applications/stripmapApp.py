@@ -370,6 +370,42 @@ SNAPHU_INTERP_RADIUS = Application.Parameter(
     doc="Interpolation search radius in pixels for masked wrapped phase.",
 )
 
+SNAPHU_TILE_NROW = Application.Parameter(
+    "snaphuTileNRow",
+    public_name="snaphu tile nrow",
+    default=2,
+    type=int,
+    mandatory=False,
+    doc="Number of snaphu tiles along azimuth (rows).",
+)
+
+SNAPHU_TILE_NCOL = Application.Parameter(
+    "snaphuTileNCol",
+    public_name="snaphu tile ncol",
+    default=2,
+    type=int,
+    mandatory=False,
+    doc="Number of snaphu tiles along range (columns).",
+)
+
+SNAPHU_ROW_OVERLAP = Application.Parameter(
+    "snaphuRowOverlap",
+    public_name="snaphu row overlap",
+    default=400,
+    type=int,
+    mandatory=False,
+    doc="snaphu tile overlap in azimuth direction (pixels), enforced to >= 400 in tile mode.",
+)
+
+SNAPHU_COL_OVERLAP = Application.Parameter(
+    "snaphuColOverlap",
+    public_name="snaphu col overlap",
+    default=400,
+    type=int,
+    mandatory=False,
+    doc="snaphu tile overlap in range direction (pixels), enforced to >= 400 in tile mode.",
+)
+
 DO_UNWRAP_2STAGE = Application.Parameter(
     "do_unwrap_2stage",
     public_name="do unwrap 2 stage",
@@ -919,6 +955,10 @@ class _RoiBase(Application, FrameMixin):
         SNAPHU_CORR_THRESHOLD,
         SNAPHU_INTERP_MASKED_PHASE,
         SNAPHU_INTERP_RADIUS,
+        SNAPHU_TILE_NROW,
+        SNAPHU_TILE_NCOL,
+        SNAPHU_ROW_OVERLAP,
+        SNAPHU_COL_OVERLAP,
         DO_UNWRAP_2STAGE,
         UNWRAPPER_2STAGE_NAME,
         SOLVER_2STAGE,

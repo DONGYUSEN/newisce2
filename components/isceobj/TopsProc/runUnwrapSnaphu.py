@@ -223,6 +223,44 @@ def runUnwrap(self,costMode = None,initMethod = None, defomax = None, initOnly =
     if snaphu_int_format is not None:
         snp.setIntFileFormat(snaphu_int_format)
     snp.setCorFileFormat('FLOAT_DATA')
+
+    tile_nrow = max(1, int(getattr(self, 'snaphuTileNRow', 2)))
+    tile_ncol = max(1, int(getattr(self, 'snaphuTileNCol', 2)))
+    row_overlap = max(0, int(getattr(self, 'snaphuRowOverlap', 400)))
+    col_overlap = max(0, int(getattr(self, 'snaphuColOverlap', 400)))
+    min_overlap = 400
+
+    if tile_nrow > 1 and row_overlap < min_overlap:
+        logger.warning(
+            'snaphu row overlap=%d is below required minimum %d; using %d',
+            row_overlap,
+            min_overlap,
+            min_overlap,
+        )
+        row_overlap = min_overlap
+    if tile_ncol > 1 and col_overlap < min_overlap:
+        logger.warning(
+            'snaphu col overlap=%d is below required minimum %d; using %d',
+            col_overlap,
+            min_overlap,
+            min_overlap,
+        )
+        col_overlap = min_overlap
+
+    snp.setTileNRow(tile_nrow)
+    snp.setTileNCol(tile_ncol)
+    snp.setRowOverlap(row_overlap)
+    snp.setColOverlap(col_overlap)
+    # Keep global minimum overlap floor at 400 in tile mode.
+    snp.minTileOverlap = max(min_overlap, int(getattr(snp, 'minTileOverlap', min_overlap)))
+
+    logger.info(
+        'snaphu tiling configured for topsApp: tiles=%dx%d, overlap(row/col)=%d/%d',
+        tile_nrow,
+        tile_ncol,
+        row_overlap,
+        col_overlap,
+    )
     snp.prepare()
     snp.unwrap()
 

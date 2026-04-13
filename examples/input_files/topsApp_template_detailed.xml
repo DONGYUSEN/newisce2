@@ -26,6 +26,10 @@
     <property name="snaphu coherence threshold">0.20</property>
     <property name="snaphu interpolate masked phase">False</property>
     <property name="snaphu interpolation radius">300</property>
+    <property name="snaphu tile nrow">2</property>
+    <property name="snaphu tile ncol">2</property>
+    <property name="snaphu row overlap">400</property>
+    <property name="snaphu col overlap">400</property>
 
     <!-- New/important runtime knobs in this branch -->
     <property name="use GPU">True</property>

@@ -62,6 +62,20 @@ topsApp.py topsApp.xml --steps --start=fineoffsets --end=mergebursts
 - 当前 `topsApp.py` 默认值为 `True`
 - 即使开启 GPU，`runRangeCoreg` 的核心筛选仍由 `offset SNR threshold` 决定
 
+### 3.4 snaphu 分块解缠（大场景推荐）
+
+```xml
+<property name="snaphu tile nrow">2</property>
+<property name="snaphu tile ncol">2</property>
+<property name="snaphu row overlap">400</property>
+<property name="snaphu col overlap">400</property>
+```
+
+说明：
+- `topsApp` 默认使用 `2x2` 分块执行 snaphu（适合大幅面数据降低内存压力）
+- 分块模式下 `row/col overlap` 会被约束为不低于 `400`
+- 若图像尺寸较小，内部会再做合法性裁剪以避免不可能的参数组合
+
 ## 4. 最小配置片段示例
 
 ```xml
