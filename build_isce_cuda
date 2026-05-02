@@ -1,2 +1,2 @@
-docker build --no-cache -t isce:cuda -f docker/Dockerfile.cuda .
+docker build --no-cache --rm --force-rm -t isce2:cuda -f docker/Dockerfile.cuda .
 
