@@ -19,9 +19,11 @@ set(files
     looks.py
     make_raw.py
     mdx.py
+    multilook.py
     postprocess_hook.py
     rtcApp.py
     stitcher.py
+    strip_insar.py
     stripmapApp.py
     topsApp.py
     upsampleDem.py

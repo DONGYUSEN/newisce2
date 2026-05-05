@@ -212,6 +212,8 @@ COPY --from=builder /opt/isce2/src/isce2/contrib/stack /opt/isce2/contrib/stack
 COPY --from=builder /opt/isce2/src/isce2/contrib/timeseries /opt/isce2/contrib/timeseries
 COPY --from=builder /opt/isce2/src/isce2/contrib/snaphu-py /opt/isce2/contrib/snaphu-py
 COPY --from=builder /opt/isce2/src/isce2/contrib/spurt /opt/isce2/contrib/spurt
+COPY --from=builder /opt/isce2/src/isce2/applications/multilook.py /opt/isce2/applications/multilook.py
+COPY --from=builder /opt/isce2/src/isce2/applications/strip_insar.py /opt/isce2/applications/strip_insar.py
 COPY docker/README.md /opt/isce2/docker/README.md
 COPY docker/isce2_raster_convert.py /usr/local/bin/isce2-raster-convert
 COPY docker/isce2_tops_postprocess.py /usr/local/bin/isce2-tops-postprocess
