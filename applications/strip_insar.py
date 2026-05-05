@@ -115,6 +115,15 @@ DO_UNWRAP = Application.Parameter(
     doc="True if unwrapping is desired.",
 )
 
+SNAPHU_GMTSAR_PREPROCESS = Application.Parameter(
+    "snaphuGmtsarPreprocess",
+    public_name="snaphu gmtsar preprocess",
+    default=True,
+    type=bool,
+    mandatory=False,
+    doc="Enable GMTSAR-style coherence-mask preprocessing before snaphu unwrapping.",
+)
+
 SNAPHU_CORR_THRESHOLD = Application.Parameter(
     "snaphuCorrThreshold",
     public_name="snaphu coherence threshold",
@@ -122,6 +131,60 @@ SNAPHU_CORR_THRESHOLD = Application.Parameter(
     type=float,
     mandatory=False,
     doc="Coherence threshold used for snaphu preprocessing.",
+)
+
+SNAPHU_INTERP_MASKED_PHASE = Application.Parameter(
+    "snaphuInterpMaskedPhase",
+    public_name="snaphu interpolate masked phase",
+    default=False,
+    type=bool,
+    mandatory=False,
+    doc="Interpolate masked wrapped phase before snaphu (GMTSAR interp-style).",
+)
+
+SNAPHU_INTERP_RADIUS = Application.Parameter(
+    "snaphuInterpRadius",
+    public_name="snaphu interpolation radius",
+    default=300,
+    type=int,
+    mandatory=False,
+    doc="Interpolation search radius in pixels for masked wrapped phase.",
+)
+
+SNAPHU_TILE_NROW = Application.Parameter(
+    "snaphuTileNRow",
+    public_name="snaphu tile nrow",
+    default=2,
+    type=int,
+    mandatory=False,
+    doc="Number of snaphu tiles along azimuth (rows).",
+)
+
+SNAPHU_TILE_NCOL = Application.Parameter(
+    "snaphuTileNCol",
+    public_name="snaphu tile ncol",
+    default=2,
+    type=int,
+    mandatory=False,
+    doc="Number of snaphu tiles along range (columns).",
+)
+
+SNAPHU_ROW_OVERLAP = Application.Parameter(
+    "snaphuRowOverlap",
+    public_name="snaphu row overlap",
+    default=400,
+    type=int,
+    mandatory=False,
+    doc="snaphu tile overlap in azimuth direction (pixels), enforced to >= 400 in tile mode.",
+)
+
+SNAPHU_COL_OVERLAP = Application.Parameter(
+    "snaphuColOverlap",
+    public_name="snaphu col overlap",
+    default=400,
+    type=int,
+    mandatory=False,
+    doc="snaphu tile overlap in range direction (pixels), enforced to >= 400 in tile mode.",
 )
 
 USE_HIGH_RESOLUTION_DEM_ONLY = Application.Parameter(
@@ -579,7 +642,14 @@ class StripInsarApp(Application, FrameMixin):
         ORBIT_INTERPOLATION_METHOD,
         UNWRAPPER_NAME,
         DO_UNWRAP,
+        SNAPHU_GMTSAR_PREPROCESS,
         SNAPHU_CORR_THRESHOLD,
+        SNAPHU_INTERP_MASKED_PHASE,
+        SNAPHU_INTERP_RADIUS,
+        SNAPHU_TILE_NROW,
+        SNAPHU_TILE_NCOL,
+        SNAPHU_ROW_OVERLAP,
+        SNAPHU_COL_OVERLAP,
         USE_HIGH_RESOLUTION_DEM_ONLY,
         DEM_FILENAME,
         GEO_POSTING,
@@ -1925,6 +1995,16 @@ def main():
         }
         return alias.get(token)
 
+    def _parse_bool_text(val):
+        if isinstance(val, bool):
+            return bool(val)
+        sval = str(val or "").strip().lower()
+        if sval in ("1", "true", "t", "yes", "y", "on"):
+            return True
+        if sval in ("0", "false", "f", "no", "n", "off"):
+            return False
+        return None
+
     def _xml_prop_in_node(node, pname):
         target = _norm_key(pname)
         for p in node.findall("property"):
@@ -2060,6 +2140,82 @@ def main():
                 orbit_val,
                 getattr(insar, "orbitInterpolationMethod", None),
             )
+
+        # Unwrap/snaphu config backfill from parameter XML.
+        # This keeps strip_insar behavior consistent with stripmapApp-style XML.
+        unwrap_val = (
+            _xml_prop(root, "unwrapper_name")
+            or _xml_prop(root, "unwrapper name")
+        )
+        if unwrap_val not in [None, ""]:
+            insar.unwrapper_name = str(unwrap_val).strip()
+
+        do_unwrap_val = (
+            _xml_prop(root, "do_unwrap")
+            or _xml_prop(root, "do unwrap")
+        )
+        do_unwrap_bool = _parse_bool_text(do_unwrap_val)
+        if do_unwrap_bool is not None:
+            insar.do_unwrap = do_unwrap_bool
+
+        snaphu_corr_val = (
+            _xml_prop(root, "snaphuCorrThreshold")
+            or _xml_prop(root, "snaphu coherence threshold")
+        )
+        if snaphu_corr_val not in [None, ""]:
+            try:
+                insar.snaphuCorrThreshold = float(snaphu_corr_val)
+            except Exception:
+                logger.warning(
+                    "snaphuCorrThreshold 无法解析为浮点数: %r，保留当前值=%r",
+                    snaphu_corr_val,
+                    getattr(insar, "snaphuCorrThreshold", None),
+                )
+
+        snaphu_bool_keys = (
+            ("snaphuGmtsarPreprocess", "snaphu gmtsar preprocess"),
+            ("snaphuInterpMaskedPhase", "snaphu interpolate masked phase"),
+        )
+        for key_a, key_b in snaphu_bool_keys:
+            raw = _xml_prop(root, key_a) or _xml_prop(root, key_b)
+            val = _parse_bool_text(raw)
+            if val is not None:
+                setattr(insar, key_a, val)
+
+        snaphu_int_keys = (
+            ("snaphuInterpRadius", "snaphu interpolation radius"),
+            ("snaphuTileNRow", "snaphu tile nrow"),
+            ("snaphuTileNCol", "snaphu tile ncol"),
+            ("snaphuRowOverlap", "snaphu row overlap"),
+            ("snaphuColOverlap", "snaphu col overlap"),
+        )
+        for key_a, key_b in snaphu_int_keys:
+            raw = _xml_prop(root, key_a) or _xml_prop(root, key_b)
+            if raw in [None, ""]:
+                continue
+            try:
+                setattr(insar, key_a, int(raw))
+            except Exception:
+                logger.warning("%s 无法解析为整数: %r", key_a, raw)
+
+    # Always print resolved unwrapping selection at startup for traceability.
+    logger.info(
+        "最终解缠器选择: do_unwrap=%s, unwrapper_name=%r, "
+        "snaphuGmtsarPreprocess=%r, snaphuCorrThreshold=%r, "
+        "snaphuInterpMaskedPhase=%r, snaphuInterpRadius=%r, "
+        "snaphuTileNRow=%r, snaphuTileNCol=%r, "
+        "snaphuRowOverlap=%r, snaphuColOverlap=%r",
+        str(getattr(insar, "do_unwrap", None)),
+        getattr(insar, "unwrapper_name", None),
+        getattr(insar, "snaphuGmtsarPreprocess", None),
+        getattr(insar, "snaphuCorrThreshold", None),
+        getattr(insar, "snaphuInterpMaskedPhase", None),
+        getattr(insar, "snaphuInterpRadius", None),
+        getattr(insar, "snaphuTileNRow", None),
+        getattr(insar, "snaphuTileNCol", None),
+        getattr(insar, "snaphuRowOverlap", None),
+        getattr(insar, "snaphuColOverlap", None),
+    )
     OutputPlanner.apply_layout(insar, created_dirs)
     # Refresh geocode lists after directory remapping to avoid stale paths
     # (e.g. old "interferogram/" instead of "05_interferogram/").
