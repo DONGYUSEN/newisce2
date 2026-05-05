@@ -1772,6 +1772,44 @@ class StripInsarApp(Application, FrameMixin):
                 )
             )
 
+    def _binding_matches_unwrapper(self, unwrap_name, bound_module, bound_func):
+        name = str(unwrap_name or "").strip().lower()
+        mod = str(bound_module or "")
+        func = str(bound_func or "")
+        if name in ("snaphu", "snaphu_mcf"):
+            return ("runUnwrapSnaphu" in mod) and (func in ("runUnwrap", "runUnwrapMcf"))
+        if name == "grass":
+            return ("runUnwrapGrass" in mod) and (func == "runUnwrap")
+        if name == "icu":
+            return ("runUnwrapIcu" in mod) and (func == "runUnwrap")
+        return False
+
+    def _refresh_unwrapper_binding(self, reason="manual"):
+        """
+        Rebind runUnwrapper wrapper using current do_unwrap/unwrapper_name.
+        This prevents stale facility binding when parameters are updated after configure().
+        """
+        desired_do = bool(getattr(self, "do_unwrap", False))
+        desired_name = str(getattr(self, "unwrapper_name", "grass") or "grass").strip().lower()
+        self.runUnwrapper = StripmapProc.createUnwrapper(self, desired_do, desired_name)
+        method = getattr(getattr(self, "runUnwrapper", None), "method", None)
+        bound_mod = getattr(method, "__module__", None)
+        bound_fun = getattr(method, "__name__", None)
+        logger.info(
+            "解缠器绑定刷新[%s]: do_unwrap=%s, requested=%r, bound=%s.%s",
+            reason,
+            str(desired_do),
+            desired_name,
+            str(bound_mod),
+            str(bound_fun),
+        )
+        if desired_do and (not self._binding_matches_unwrapper(desired_name, bound_mod, bound_fun)):
+            raise RuntimeError(
+                "解缠器绑定异常: requested={0}, bound={1}.{2}".format(
+                    desired_name, bound_mod, bound_fun
+                )
+            )
+
     def _precheck_unwrap_stage(self):
         """
         Preflight checks before unwrapping to catch common failures early.
@@ -1822,6 +1860,26 @@ class StripInsarApp(Application, FrameMixin):
             raise RuntimeError(
                 "unwrap预检失败: 解缠器 '%s' 依赖模块不可用 (%s)" % (unwrap_name, str(err))
             )
+
+        # Ensure requested backend and actual runUnwrapper binding are consistent.
+        method = getattr(getattr(self, "runUnwrapper", None), "method", None)
+        bound_mod = getattr(method, "__module__", None)
+        bound_fun = getattr(method, "__name__", None)
+        logger.info(
+            "unwrap实际绑定检查: requested=%s, bound=%s.%s",
+            unwrap_name,
+            str(bound_mod),
+            str(bound_fun),
+        )
+        if not self._binding_matches_unwrapper(unwrap_name, bound_mod, bound_fun):
+            logger.warning(
+                "unwrap绑定与请求不一致，尝试自动重绑: requested=%s, current=%s.%s",
+                unwrap_name,
+                str(bound_mod),
+                str(bound_fun),
+            )
+            self._refresh_unwrapper_binding(reason="unwrap_precheck_rebind")
+
         self._append_stage_note("unwrap_precheck=OK backend=%s" % unwrap_name)
 
     def _precheck_preprocess_sensor_config(self):
@@ -2228,6 +2286,8 @@ def main():
         getattr(insar, "snaphuRowOverlap", None),
         getattr(insar, "snaphuColOverlap", None),
     )
+    # Rebind unwrapper after XML backfill so runtime backend matches final config.
+    insar._refresh_unwrapper_binding(reason="post_xml_backfill")
     OutputPlanner.apply_layout(insar, created_dirs)
     # Refresh geocode lists after directory remapping to avoid stale paths
     # (e.g. old "interferogram/" instead of "05_interferogram/").
