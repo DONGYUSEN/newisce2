@@ -164,15 +164,23 @@ def createUnwrapper(other, do_unwrap=None, unwrapperName=None, unwrap=None):
         # if not defined create an empty method that does nothing
         def runUnwrap(self):
             return None
-    elif unwrapperName.lower() == "snaphu":
-        from .runUnwrapSnaphu import runUnwrap
-    elif unwrapperName.lower() == "snaphu_mcf":
-        from .runUnwrapSnaphu import runUnwrapMcf as runUnwrap
-    elif unwrapperName.lower() == "icu":
-        from .runUnwrapIcu import runUnwrap
-    elif unwrapperName.lower() == "grass":
-        print("running unwrapping grass")
-        from .runUnwrapGrass import runUnwrap
+    else:
+        name = str(unwrapperName or "grass").strip().lower()
+        if name == "snaphu":
+            from .runUnwrapSnaphu import runUnwrap
+        elif name == "snaphu_mcf":
+            from .runUnwrapSnaphu import runUnwrapMcf as runUnwrap
+        elif name == "icu":
+            from .runUnwrapIcu import runUnwrap
+        elif name == "grass":
+            print("running unwrapping grass")
+            from .runUnwrapGrass import runUnwrap
+        else:
+            raise ValueError(
+                "Unknown unwrapperName '{0}'. Supported: grass, snaphu, snaphu_mcf, icu".format(
+                    unwrapperName
+                )
+            )
     return _RunWrapper(other, runUnwrap)
 
 
