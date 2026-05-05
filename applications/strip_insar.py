@@ -2112,8 +2112,20 @@ def main():
 
     # Pass XML path to Application parser so facilities (reference/secondary)
     # are materialized from input configuration.
+    #
+    # Important: do not use instance name "strip_insar" here. Configurable
+    # will auto-load local "<name>.xml" (i.e. strip_insar.xml) with higher
+    # priority, and that file is typically a runtime product instead of a
+    # clean parameter file.
     xml_path = _resolve_parameter_xml(args.input_xml)
-    insar = StripInsarApp(name="strip_insar", cmdline=[xml_path])
+    local_runtime_xml = os.path.abspath("strip_insar.xml")
+    if os.path.isfile(local_runtime_xml):
+        logger.info(
+            "检测到本地运行产物 strip_insar.xml，将忽略其自动配置加载，"
+            "仅使用参数文件: %s",
+            xml_path,
+        )
+    insar = StripInsarApp(name="strip_insar_runtime", cmdline=[xml_path])
     insar.configure()
     # Ensure orbit interpolation method is honored from XML even when
     # configurable key binding differs across XML styles.
