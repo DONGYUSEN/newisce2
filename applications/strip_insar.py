@@ -1907,6 +1907,50 @@ class OutputPlanner:
 def main():
     import argparse
 
+    def _norm_key(name):
+        if not name:
+            return ""
+        return "".join(str(name).strip().replace("_", " ").split()).lower()
+
+    def _norm_orbit_method(val):
+        token = str(val or "").strip().upper()
+        alias = {
+            "HERMITE": "HERMITE",
+            "SCH": "SCH",
+            "LEGENDRE": "LEGENDRE",
+            "LAGRANGE": "LEGENDRE",
+            "0": "HERMITE",
+            "1": "SCH",
+            "2": "LEGENDRE",
+        }
+        return alias.get(token)
+
+    def _xml_prop_in_node(node, pname):
+        target = _norm_key(pname)
+        for p in node.findall("property"):
+            n = p.get("name")
+            if _norm_key(n) != target:
+                continue
+            v = p.find("value")
+            if v is not None and v.text is not None:
+                return v.text.strip()
+            if p.text is not None:
+                return p.text.strip()
+        return None
+
+    def _xml_prop(root, pname):
+        # 1) root-level property
+        val = _xml_prop_in_node(root, pname)
+        if val:
+            return val
+        # 2) nested under <component name="insar"> for stripmapApp-style XML
+        for comp in root.findall("component"):
+            if _norm_key(comp.get("name")) == "insar":
+                val = _xml_prop_in_node(comp, pname)
+                if val:
+                    return val
+        return None
+
     parser = argparse.ArgumentParser(
         description="StripInSAR - 简化的条带InSAR处理工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1964,6 +2008,31 @@ def main():
     xml_path = os.path.abspath(args.input_xml)
     insar = StripInsarApp(name="strip_insar", cmdline=[xml_path])
     insar.configure()
+    # Ensure orbit interpolation method is honored from XML even when
+    # configurable key binding differs across XML styles.
+    try:
+        root = ET.parse(xml_path).getroot()
+    except Exception:
+        root = None
+    if root is not None:
+        orbit_val = (
+            _xml_prop(root, "orbitInterpolationMethod")
+            or _xml_prop(root, "orbit interpolation method")
+        )
+        orbit_norm = _norm_orbit_method(orbit_val)
+        if orbit_norm is not None:
+            insar.orbitInterpolationMethod = orbit_norm
+            logger.info(
+                "轨道插值方法已从XML回填: orbitInterpolationMethod=%s (raw=%r)",
+                orbit_norm,
+                orbit_val,
+            )
+        elif orbit_val not in [None, ""]:
+            logger.warning(
+                "XML中轨道插值方法未识别: %r，保留当前值=%r",
+                orbit_val,
+                getattr(insar, "orbitInterpolationMethod", None),
+            )
     OutputPlanner.apply_layout(insar, created_dirs)
     # Refresh geocode lists after directory remapping to avoid stale paths
     # (e.g. old "interferogram/" instead of "05_interferogram/").
