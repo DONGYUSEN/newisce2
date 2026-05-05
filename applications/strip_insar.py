@@ -1951,6 +1951,33 @@ def main():
                     return val
         return None
 
+    def _resolve_parameter_xml(input_path):
+        """
+        Prefer the original parameter XML over strip_insar.xml output.
+        If the caller points at strip_insar.xml, fall back to sibling
+        parameter files such as input.xml or stripmapApp.xml.
+        """
+        xml_path = os.path.abspath(input_path)
+        if os.path.basename(xml_path).lower() != "strip_insar.xml":
+            return xml_path
+
+        base_dir = os.path.dirname(xml_path)
+        candidates = [
+            os.path.join(base_dir, "input.xml"),
+            os.path.join(base_dir, "stripmapApp.xml"),
+        ]
+        for cand in candidates:
+            if os.path.isfile(cand):
+                logger.info(
+                    "启动参数是 strip_insar.xml，改用参数文件: %s",
+                    cand,
+                )
+                return os.path.abspath(cand)
+
+        raise RuntimeError(
+            "启动参数不能是 strip_insar.xml；请显式提供原始参数文件（input.xml 或 stripmapApp.xml）。"
+        )
+
     parser = argparse.ArgumentParser(
         description="StripInSAR - 简化的条带InSAR处理工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2005,7 +2032,7 @@ def main():
 
     # Pass XML path to Application parser so facilities (reference/secondary)
     # are materialized from input configuration.
-    xml_path = os.path.abspath(args.input_xml)
+    xml_path = _resolve_parameter_xml(args.input_xml)
     insar = StripInsarApp(name="strip_insar", cmdline=[xml_path])
     insar.configure()
     # Ensure orbit interpolation method is honored from XML even when
